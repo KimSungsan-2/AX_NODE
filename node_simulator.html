@@ -212,6 +212,16 @@
   .toolbar button:hover { background: #1428A0; color: #fff; border-color: #1428A0; }
   .toolbar button:disabled { opacity: 0.4; cursor: not-allowed; }
   .toolbar button:disabled:hover { background: #fff; color: #222; border-color: #D1D5DB; }
+  #applyAXBtn:not(:disabled) {
+    background: linear-gradient(135deg, #FFB300, #FF8F00);
+    color: #fff;
+    border-color: #FF8F00;
+    font-weight: 700;
+  }
+  #applyAXBtn:not(:disabled):hover {
+    background: linear-gradient(135deg, #1428A0, #0A1872);
+    border-color: #1428A0;
+  }
 
   /* Right counter */
   .counter-card {
@@ -479,12 +489,14 @@
       <div style="border-top:1px solid #E5E7EB; margin:6px 0; padding-top:6px; font-size:10px; color:#6B7280;">
         ★ 화살표 길이 = 처리 시간(병목 크기)<br>
         ★ 화살표 두께 = 시간 가중치<br>
-        ◆ 표시 엣지 = 사이클 클로즈 (피드백 루프)
+        ◆ 표시 엣지 = 사이클 클로즈 (피드백 루프)<br>
+        <span style="color:#FF8F00; font-weight:700;">★ AX 트랙</span> = 자동화 적용 (포크레인 궤도 효과)
       </div>
     </div>
     <div class="toolbar">
       <button id="addNodeBtn">+ 노드 추가</button>
       <button id="addEdgeBtn" disabled>+ 엣지 연결</button>
+      <button id="applyAXBtn" disabled>★ AX 적용</button>
       <button id="bulkRemoveBtn" disabled>선택 일괄 제거</button>
       <button id="fitBtn">화면 맞춤</button>
     </div>
@@ -529,6 +541,7 @@
   <div class="item danger" data-action="remove">이 노드 제거</div>
   <div class="item" data-action="select-connected">연결 노드 모두 선택</div>
   <div class="item" data-action="edit">노드 편집</div>
+  <div class="item" data-action="ax-toggle">★ AX 적용 / 해제</div>
   <div class="item" data-action="info">상세 정보</div>
 </div>
 
@@ -1201,6 +1214,7 @@ const state = {
   edges: null,
   removedHistory: [], // [{node, edges}]
   selectedNodeIds: new Set(),
+  axApplied: new Set(), // node IDs that have AX applied (caterpillar track effect)
   filters: {
     depts: new Set(),
     jobs: new Set(),
@@ -1323,6 +1337,175 @@ function initNetwork() {
   state.network.on('oncontext', onNetworkRightClick);
   state.network.on('selectNode', onSelectionChange);
   state.network.on('deselectNode', onSelectionChange);
+
+  // ★ AX 캐터필러 트랙 오버레이 — 매 프레임 캔버스에 직접 그림
+  state.network.on('afterDrawing', drawAXTracks);
+  startAXAnimation();
+}
+
+//====================== ★ AX 캐터필러 트랙 애니메이션 ======================
+let _axRafId = null;
+function startAXAnimation() {
+  function tick() {
+    if (state.axApplied && state.axApplied.size > 0 && state.network) {
+      state.network.redraw(); // triggers afterDrawing → drawAXTracks
+    }
+    _axRafId = requestAnimationFrame(tick);
+  }
+  if (!_axRafId) tick();
+}
+
+function drawAXTracks(ctx) {
+  if (!state.axApplied || state.axApplied.size === 0) return;
+  const ids = [...state.axApplied].filter(id => state.nodes.get(id));
+  if (ids.length === 0) return;
+
+  const positions = state.network.getPositions(ids);
+  const t = performance.now();
+  const phase = (t / 1000) * 60; // dash drift speed (px/sec)
+  const spinAngle = (t / 1000) * 1.6; // wheel rotation (rad/sec)
+
+  ids.forEach(id => {
+    const p = positions[id];
+    if (!p) return;
+    const box = state.network.getBoundingBox(id);
+    if (!box) return;
+    const halfW = (box.right - box.left) / 2;
+    const halfH = (box.bottom - box.top) / 2;
+    drawCaterpillarTrack(ctx, p.x, p.y, halfW, halfH, phase, spinAngle);
+  });
+}
+
+function drawCaterpillarTrack(ctx, cx, cy, halfW, halfH, phase, spin) {
+  // Two wheels flank the node horizontally
+  const wheelR = Math.max(18, halfH * 1.05);
+  const offset = halfW + wheelR * 0.45; // distance from node center to wheel center
+  const yOff = 0;
+  const yWheel = cy + yOff;
+  const lx = cx - offset;
+  const rx = cx + offset;
+
+  ctx.save();
+
+  // 1) Outer track band (stadium shape) — Samsung blue thick base
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = 'rgba(20, 40, 160, 0.85)';
+  ctx.beginPath();
+  ctx.moveTo(lx, yWheel - wheelR);
+  ctx.lineTo(rx, yWheel - wheelR);
+  ctx.arc(rx, yWheel, wheelR, -Math.PI / 2, Math.PI / 2, false);
+  ctx.lineTo(lx, yWheel + wheelR);
+  ctx.arc(lx, yWheel, wheelR, Math.PI / 2, -Math.PI / 2, false);
+  ctx.closePath();
+  ctx.stroke();
+
+  // 2) Track tread — moving dashes (direction of motion: clockwise around the track)
+  ctx.lineWidth = 7;
+  ctx.strokeStyle = '#FFB300'; // amber tread
+  ctx.setLineDash([10, 8]);
+  ctx.lineDashOffset = -phase;
+  ctx.beginPath();
+  ctx.moveTo(lx, yWheel - wheelR);
+  ctx.lineTo(rx, yWheel - wheelR);
+  ctx.arc(rx, yWheel, wheelR, -Math.PI / 2, Math.PI / 2, false);
+  ctx.lineTo(lx, yWheel + wheelR);
+  ctx.arc(lx, yWheel, wheelR, Math.PI / 2, -Math.PI / 2, false);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 3) Inner secondary band (gives depth)
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+  ctx.beginPath();
+  ctx.moveTo(lx, yWheel - wheelR + 5);
+  ctx.lineTo(rx, yWheel - wheelR + 5);
+  ctx.moveTo(lx, yWheel + wheelR - 5);
+  ctx.lineTo(rx, yWheel + wheelR - 5);
+  ctx.stroke();
+
+  // 4) Two wheels with spinning spokes (left & right)
+  drawWheel(ctx, lx, yWheel, wheelR - 4, spin);
+  drawWheel(ctx, rx, yWheel, wheelR - 4, -spin);
+
+  // 5) AX 글로우 라벨
+  ctx.font = 'bold 11px "Nanum Gothic", sans-serif';
+  ctx.fillStyle = '#FFB300';
+  ctx.strokeStyle = 'rgba(20, 40, 160, 0.85)';
+  ctx.lineWidth = 3;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const labelY = yWheel + wheelR + 12;
+  ctx.strokeText('★ AX', cx, labelY);
+  ctx.fillText('★ AX', cx, labelY);
+
+  ctx.restore();
+}
+
+function drawWheel(ctx, cx, cy, r, angle) {
+  ctx.save();
+  // Wheel body
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+  ctx.strokeStyle = '#1428A0';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Hub
+  ctx.fillStyle = '#1428A0';
+  ctx.beginPath();
+  ctx.arc(cx, cy, Math.max(2.5, r * 0.15), 0, Math.PI * 2);
+  ctx.fill();
+
+  // Spinning spokes
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  ctx.strokeStyle = '#1428A0';
+  ctx.lineWidth = 2;
+  const spokes = 6;
+  for (let i = 0; i < spokes; i++) {
+    const a = (i / spokes) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(a) * (r - 2), Math.sin(a) * (r - 2));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function toggleAX(nodeIds) {
+  let added = 0, removed = 0;
+  nodeIds.forEach(id => {
+    if (!state.nodes.get(id)) return;
+    if (state.axApplied.has(id)) {
+      state.axApplied.delete(id);
+      removed++;
+    } else {
+      state.axApplied.add(id);
+      added++;
+    }
+  });
+  state.network.redraw();
+  if (added > 0 && removed === 0) showToast(`★ AX 적용: ${added}개 노드`);
+  else if (removed > 0 && added === 0) showToast(`AX 해제: ${removed}개 노드`);
+  else if (added > 0 && removed > 0) showToast(`AX 적용 ${added} / 해제 ${removed}`);
+}
+
+function applyAXToSelection() {
+  const ids = [...state.selectedNodeIds];
+  if (ids.length === 0) return;
+  // If ALL already applied → toggle off; else apply to all
+  const allApplied = ids.every(id => state.axApplied.has(id));
+  if (allApplied) {
+    ids.forEach(id => state.axApplied.delete(id));
+    showToast(`AX 해제: ${ids.length}개`);
+  } else {
+    ids.forEach(id => state.axApplied.add(id));
+    showToast(`★ AX 적용: ${ids.length}개 노드 자동화 시작`);
+  }
+  state.network.redraw();
 }
 
 //====================== INTERACTIONS ======================
@@ -1345,6 +1528,7 @@ function updateSelectionUI() {
   if (count > 0) badge.classList.add('show'); else badge.classList.remove('show');
   document.getElementById('bulkRemoveBtn').disabled = count === 0;
   document.getElementById('addEdgeBtn').disabled = state.nodes.length < 2;
+  document.getElementById('applyAXBtn').disabled = count === 0;
 }
 
 function onNetworkRightClick(params) {
@@ -1371,6 +1555,7 @@ document.getElementById('ctxMenu').addEventListener('click', e => {
   hideContextMenu();
   if (action === 'remove') removeNode(nodeId);
   else if (action === 'edit') openNodeModal(nodeId);
+  else if (action === 'ax-toggle') toggleAX([nodeId]);
   else if (action === 'select-connected') {
     const connected = state.network.getConnectedNodes(nodeId);
     const all = [nodeId, ...connected];
@@ -1401,6 +1586,9 @@ function removeNode(nodeId, skipAnimation = false) {
     node: visNode,
     edges: connectedEdges
   });
+
+  // Clean up AX state for removed node
+  if (state.axApplied) state.axApplied.delete(nodeId);
 
   if (skipAnimation) {
     state.edges.remove(connectedEdgeIds);
@@ -2054,6 +2242,7 @@ document.addEventListener('keydown', e => {
 
 //====================== EVENTS ======================
 document.getElementById('bulkRemoveBtn').addEventListener('click', bulkRemove);
+document.getElementById('applyAXBtn').addEventListener('click', applyAXToSelection);
 document.getElementById('fitBtn').addEventListener('click', () => {
   // Reset any NaN/extreme positions, then fit
   try {

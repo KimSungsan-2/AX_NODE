@@ -80,7 +80,25 @@
     letter-spacing: 1.2px;
     margin-bottom: 10px;
     text-transform: uppercase;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    padding: 4px 0;
+    transition: color 0.15s;
   }
+  .panel-title:hover { color: #1428A0; }
+  .panel-title .caret {
+    margin-right: 6px;
+    font-size: 9px;
+    transition: transform 0.18s;
+    display: inline-block;
+    color: #9CA3AF;
+    width: 10px;
+  }
+  .panel-section.collapsed .panel-title .caret { transform: rotate(-90deg); }
+  .panel-section.collapsed > *:not(.panel-title) { display: none !important; }
+  .panel-section.collapsed .panel-title { margin-bottom: 4px; }
   .panel-section { margin-bottom: 22px; }
 
   .filter-group label {
@@ -445,22 +463,22 @@
   <!-- LEFT PANEL -->
   <aside class="left">
     <div class="panel-section">
-      <div class="panel-title">부서 필터</div>
+      <div class="panel-title"><span class="caret">▾</span>부서 필터</div>
       <div class="filter-group" id="deptFilter"></div>
     </div>
 
     <div class="panel-section">
-      <div class="panel-title">직군 필터</div>
+      <div class="panel-title"><span class="caret">▾</span>직군 필터</div>
       <div class="filter-group" id="jobFilter"></div>
     </div>
 
     <div class="panel-section">
-      <div class="panel-title">엣지 타입</div>
+      <div class="panel-title"><span class="caret">▾</span>엣지 타입</div>
       <div class="filter-group" id="edgeFilter"></div>
     </div>
 
     <div class="panel-section">
-      <div class="panel-title">옵션</div>
+      <div class="panel-title"><span class="caret">▾</span>옵션</div>
       <div class="filter-group">
         <label>
           <input type="checkbox" id="axOnly">
@@ -504,32 +522,36 @@
 
   <!-- RIGHT PANEL -->
   <aside class="right">
-    <div class="panel-title">절감 효과 (실시간)</div>
+    <div class="panel-section">
+      <div class="panel-title"><span class="caret">▾</span>절감 효과 (실시간)</div>
 
-    <div class="counter-card hours">
-      <div class="counter-label">연간 절감 시간</div>
-      <div class="counter-value" id="savedHours">0 h</div>
-      <div class="counter-sub">제거된 업무 + 연결 처리 시간</div>
-    </div>
+      <div class="counter-card hours">
+        <div class="counter-label">연간 절감 시간</div>
+        <div class="counter-value" id="savedHours">0 h</div>
+        <div class="counter-sub">제거된 업무 + 연결 처리 시간</div>
+      </div>
 
-    <div class="counter-card cost">
-      <div class="counter-label">연간 절감 비용</div>
-      <div class="counter-value" id="savedCost">0 원</div>
-      <div class="counter-sub">시간 × 60,000원/h</div>
-    </div>
+      <div class="counter-card cost">
+        <div class="counter-label">연간 절감 비용</div>
+        <div class="counter-value" id="savedCost">0 원</div>
+        <div class="counter-sub">시간 × 60,000원/h</div>
+      </div>
 
-    <div class="counter-card fte">
-      <div class="counter-label">FTE 절감</div>
-      <div class="counter-value" id="savedFTE">0.00 명</div>
-      <div class="counter-sub">2,080 h/년 기준</div>
+      <div class="counter-card fte">
+        <div class="counter-label">FTE 절감</div>
+        <div class="counter-value" id="savedFTE">0.00 명</div>
+        <div class="counter-sub">2,080 h/년 기준</div>
+      </div>
     </div>
 
     <div class="selection-badge" id="selectionBadge">
       <span id="selectionCount">0</span>개 노드 선택됨 — 노드 클릭으로 추가/해제, 빈공간 클릭으로 전체 해제. 2개 이상 시 ★ AX 적용으로 묶음
     </div>
 
-    <div class="panel-title" style="margin-top: 18px;">제거 이력</div>
-    <div class="removed-list" id="removedList"></div>
+    <div class="panel-section">
+      <div class="panel-title"><span class="caret">▾</span>제거 이력</div>
+      <div class="removed-list" id="removedList"></div>
+    </div>
 
     <button class="action-btn primary" id="exportBtn">결과 클립보드 복사</button>
     <button class="action-btn secondary" id="undoAllBtn">전체 복원</button>
@@ -2332,6 +2354,30 @@ document.getElementById('exportBtn').addEventListener('click', exportToClipboard
 document.getElementById('undoAllBtn').addEventListener('click', undoAll);
 document.getElementById('resetBtn').addEventListener('click', resetSimulation);
 
+//====================== COLLAPSIBLE PANEL SECTIONS ======================
+function setupCollapsibleSections() {
+  const COLLAPSE_KEY = 'da_sim_collapsed_sections';
+  let collapsed = [];
+  try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '[]'); } catch(e) {}
+
+  document.querySelectorAll('.panel-section').forEach((sec, idx) => {
+    const title = sec.querySelector('.panel-title');
+    if (!title) return;
+    // Use the title's text content (without caret) as a stable key
+    const key = title.textContent.trim().replace(/^[▾▸▶▼]/, '').trim() || `sec_${idx}`;
+    sec.dataset.sectionKey = key;
+    if (collapsed.includes(key)) sec.classList.add('collapsed');
+
+    title.addEventListener('click', e => {
+      e.stopPropagation();
+      sec.classList.toggle('collapsed');
+      const cur = [...document.querySelectorAll('.panel-section.collapsed')]
+        .map(s => s.dataset.sectionKey);
+      try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(cur)); } catch(e) {}
+    });
+  });
+}
+
 //====================== BOOT ======================
 function boot() {
   if (typeof vis === 'undefined' || !vis.DataSet) {
@@ -2349,6 +2395,7 @@ function boot() {
   renderRemovedList();
   updateStatsBanner();
   updateSelectionUI();
+  setupCollapsibleSections();
   console.log('[boot] initialized with', state.nodes.length, 'nodes,', state.edges.length, 'edges');
 
   // Force render after layout settles

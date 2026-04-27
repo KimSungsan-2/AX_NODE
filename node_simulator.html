@@ -1,0 +1,2121 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>DA사업부 업무 노드 시뮬레이터</title>
+<link href="https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700;800&display=swap" rel="stylesheet">
+<script>
+  // Multi-CDN fallback loader for vis-network
+  // Browsers (Edge tracking prevention, etc.) may block some CDNs.
+  (function loadVisNetwork() {
+    const sources = [
+      'https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/standalone/umd/vis-network.min.js',
+      'https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js'
+    ];
+    let i = 0;
+    function tryNext() {
+      if (i >= sources.length) {
+        document.addEventListener('DOMContentLoaded', showLoadError);
+        return;
+      }
+      const s = document.createElement('script');
+      s.src = sources[i++];
+      s.onload = () => { window._visLoaded = true; console.log('[vis-network] loaded from', s.src); };
+      s.onerror = () => { console.warn('[vis-network] blocked:', s.src); tryNext(); };
+      document.head.appendChild(s);
+    }
+    function showLoadError() {
+      document.body.innerHTML = `
+        <div style="font-family:'Nanum Gothic',sans-serif; padding:40px; max-width:680px; margin:60px auto; background:#FEF2F2; border:1px solid #FECACA; border-radius:10px; color:#991B1B;">
+          <h2 style="margin-bottom:14px;">⚠ vis-network 라이브러리 로드 실패</h2>
+          <p style="line-height:1.7; color:#7F1D1D;">
+            브라우저의 <b>Tracking Prevention(추적 방지)</b> 기능이 CDN을 차단하고 있습니다. 아래 중 하나를 선택하세요:
+          </p>
+          <ol style="line-height:2; margin:14px 0 14px 20px; color:#1F2937;">
+            <li><b>방법 A — Edge 추적 방지 해제 (가장 쉬움)</b><br>
+              주소창의 자물쇠 아이콘 → "이 사이트의 추적 방지 해제" → 새로고침</li>
+            <li><b>방법 B — 다른 브라우저 사용</b>: Chrome/Firefox에서 열기</li>
+            <li><b>방법 C — 로컬 서버로 실행</b>: 폴더에서 cmd 열고 <code style="background:#fff;padding:2px 6px;border-radius:3px;">python -m http.server 8000</code> 실행 후 <a href="http://localhost:8000/node_simulator.html">http://localhost:8000/node_simulator.html</a></li>
+            <li><b>방법 D — vis-network 로컬 파일 다운로드</b>: <a href="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js" download>이 링크</a>를 우클릭→다른이름으로 저장 → HTML과 같은 폴더에 저장 후, HTML 상단 script 경로를 <code>vis-network.min.js</code>로 변경</li>
+          </ol>
+        </div>`;
+    }
+    tryNext();
+  })();
+</script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; font-family: 'Nanum Gothic', sans-serif; color: #222; background: #F5F6F8; overflow: hidden; }
+
+  .app { display: grid; grid-template-columns: 240px 1fr 300px; grid-template-rows: 56px 1fr; height: 100vh; }
+
+  /* Header */
+  header {
+    grid-column: 1 / 4;
+    background: #1428A0;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    z-index: 10;
+  }
+  header h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.3px; }
+  header .meta { margin-left: auto; font-size: 12px; opacity: 0.85; }
+
+  /* Panels */
+  aside.left, aside.right {
+    background: #fff;
+    border-right: 1px solid #E5E7EB;
+    overflow-y: auto;
+    padding: 20px 18px;
+  }
+  aside.right { border-right: none; border-left: 1px solid #E5E7EB; }
+
+  .panel-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #6B7280;
+    letter-spacing: 1.2px;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+  }
+  .panel-section { margin-bottom: 22px; }
+
+  .filter-group label {
+    display: flex;
+    align-items: center;
+    padding: 6px 4px;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.15s;
+  }
+  .filter-group label:hover { background: #F3F4F6; }
+  .filter-group input[type="checkbox"] { margin-right: 8px; accent-color: #1428A0; }
+  .color-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+
+  /* Dept filter — grouped */
+  .dept-toolbar {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #E5E7EB;
+  }
+  .dept-toolbar button {
+    flex: 1;
+    padding: 4px 6px;
+    font-size: 10px;
+    border: 1px solid #D1D5DB;
+    background: #fff;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    color: #6B7280;
+  }
+  .dept-toolbar button:hover { background: #1428A0; color: #fff; border-color: #1428A0; }
+  .dept-group {
+    margin-bottom: 6px;
+    border: 1px solid #F3F4F6;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .dept-group-header {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    background: #F9FAFB;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    user-select: none;
+  }
+  .dept-group-header:hover { background: #F3F4F6; }
+  .dept-group-header .caret {
+    margin-right: 4px;
+    font-size: 10px;
+    transition: transform 0.15s;
+    color: #6B7280;
+  }
+  .dept-group.collapsed .caret { transform: rotate(-90deg); }
+  .dept-group.collapsed .dept-group-body { display: none; }
+  .dept-group-name { flex: 1; }
+  .dept-group-count {
+    background: #1428A0;
+    color: #fff;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 9px;
+    font-weight: 700;
+  }
+  .dept-group-body { padding: 4px 6px; background: #fff; }
+  .dept-group-body label {
+    font-size: 12px;
+    padding: 3px 4px;
+  }
+
+  /* Graph */
+  .graph-wrap {
+    position: relative;
+    background: #FAFBFC;
+    border-bottom: 1px solid #E5E7EB;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+  #graph {
+    width: 100%;
+    flex: 1 1 auto;
+    min-height: 400px;
+    background: #FAFBFC;
+  }
+
+  .legend {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    background: rgba(255,255,255,0.95);
+    border: 1px solid #E5E7EB;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 11px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  }
+  .legend .row { display: flex; align-items: center; margin: 2px 0; }
+  .legend .swatch { width: 24px; height: 3px; margin-right: 8px; border-radius: 2px; }
+
+  .toolbar {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    background: rgba(255,255,255,0.95);
+    border: 1px solid #E5E7EB;
+    border-radius: 6px;
+    padding: 6px;
+    display: flex;
+    gap: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  }
+  .toolbar button {
+    background: #fff;
+    border: 1px solid #D1D5DB;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+  .toolbar button:hover { background: #1428A0; color: #fff; border-color: #1428A0; }
+  .toolbar button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .toolbar button:disabled:hover { background: #fff; color: #222; border-color: #D1D5DB; }
+
+  /* Right counter */
+  .counter-card {
+    background: linear-gradient(135deg, #1428A0 0%, #0A1872 100%);
+    color: #fff;
+    border-radius: 10px;
+    padding: 18px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 12px rgba(20,40,160,0.18);
+  }
+  .counter-label { font-size: 11px; opacity: 0.85; letter-spacing: 1px; margin-bottom: 4px; text-transform: uppercase; }
+  .counter-value { font-size: 26px; font-weight: 800; letter-spacing: -0.5px; }
+  .counter-sub { font-size: 11px; opacity: 0.7; margin-top: 4px; }
+  .counter-card.cost .counter-value { font-size: 22px; }
+  .counter-card.fte { background: linear-gradient(135deg, #2E7D32 0%, #1B5E20 100%); box-shadow: 0 4px 12px rgba(46,125,50,0.18); }
+  .counter-card.hours { background: linear-gradient(135deg, #E65100 0%, #BF360C 100%); box-shadow: 0 4px 12px rgba(230,81,0,0.18); }
+
+  .removed-list {
+    background: #FAFBFC;
+    border: 1px solid #E5E7EB;
+    border-radius: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 6px;
+  }
+  .removed-list:empty::before {
+    content: "제거된 노드가 없습니다";
+    display: block;
+    text-align: center;
+    color: #9CA3AF;
+    font-size: 11px;
+    padding: 14px;
+  }
+  .removed-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    font-size: 12px;
+    border-bottom: 1px solid #F3F4F6;
+  }
+  .removed-item:last-child { border-bottom: none; }
+  .removed-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .removed-item .undo-btn {
+    background: none;
+    border: 1px solid #D1D5DB;
+    padding: 2px 6px;
+    font-size: 10px;
+    cursor: pointer;
+    border-radius: 3px;
+    margin-left: 6px;
+    color: #6B7280;
+    font-family: inherit;
+  }
+  .removed-item .undo-btn:hover { background: #1428A0; color: #fff; border-color: #1428A0; }
+
+  .action-btn {
+    width: 100%;
+    padding: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-top: 8px;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+  .action-btn.primary { background: #1428A0; color: #fff; border: none; }
+  .action-btn.primary:hover { background: #0A1872; }
+  .action-btn.secondary { background: #fff; color: #1428A0; border: 1px solid #1428A0; }
+  .action-btn.secondary:hover { background: #1428A0; color: #fff; }
+  .action-btn.danger { background: #fff; color: #C62828; border: 1px solid #FCA5A5; }
+  .action-btn.danger:hover { background: #C62828; color: #fff; border-color: #C62828; }
+
+  /* Context menu */
+  .ctx-menu {
+    position: absolute;
+    background: #fff;
+    border: 1px solid #E5E7EB;
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+    padding: 4px;
+    z-index: 1000;
+    min-width: 180px;
+    display: none;
+  }
+  .ctx-menu .item {
+    padding: 8px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .ctx-menu .item:hover { background: #F3F4F6; }
+  .ctx-menu .item.danger { color: #C62828; }
+  .ctx-menu .item.danger:hover { background: #FEE2E2; }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1F2937;
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-size: 13px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    opacity: 0;
+    transition: opacity 0.25s;
+    pointer-events: none;
+    z-index: 2000;
+  }
+  .toast.show { opacity: 1; }
+
+  /* Stats banner */
+  .stats-banner {
+    display: flex;
+    background: #fff;
+    border-bottom: 1px solid #E5E7EB;
+    padding: 0;
+  }
+  .stat-item { flex: 1; padding: 10px 14px; border-right: 1px solid #E5E7EB; font-size: 11px; }
+  .stat-item:last-child { border-right: none; }
+  .stat-item .v { font-size: 16px; font-weight: 700; color: #1428A0; }
+  .stat-item .l { color: #6B7280; letter-spacing: 0.5px; text-transform: uppercase; font-size: 10px; }
+
+  .selection-badge {
+    background: #FEF3C7;
+    border: 1px solid #FCD34D;
+    color: #92400E;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    margin-bottom: 10px;
+    display: none;
+  }
+  .selection-badge.show { display: block; }
+
+  /* Modal */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(15, 23, 42, 0.55);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 3000;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    background: #fff;
+    border-radius: 10px;
+    width: 460px;
+    max-width: 92vw;
+    max-height: 88vh;
+    overflow-y: auto;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+  }
+  .modal-header {
+    background: #1428A0;
+    color: #fff;
+    padding: 14px 20px;
+    border-radius: 10px 10px 0 0;
+    font-size: 15px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .modal-close {
+    background: none; border: none; color: #fff; font-size: 18px;
+    cursor: pointer; line-height: 1;
+  }
+  .modal-body { padding: 18px 20px; }
+  .modal-body .field { margin-bottom: 12px; }
+  .modal-body label.fld {
+    display: block; font-size: 11px; color: #6B7280;
+    letter-spacing: 0.5px; text-transform: uppercase;
+    margin-bottom: 4px; font-weight: 700;
+  }
+  .modal-body input[type="text"],
+  .modal-body input[type="number"],
+  .modal-body select {
+    width: 100%; padding: 8px 10px; font-size: 13px;
+    border: 1px solid #D1D5DB; border-radius: 5px;
+    font-family: inherit; background: #fff;
+  }
+  .modal-body input:focus, .modal-body select:focus {
+    outline: none; border-color: #1428A0;
+    box-shadow: 0 0 0 2px rgba(20,40,160,0.12);
+  }
+  .modal-body .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .modal-body .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .modal-footer {
+    padding: 12px 20px;
+    border-top: 1px solid #E5E7EB;
+    display: flex; gap: 8px; justify-content: flex-end;
+  }
+  .modal-footer button {
+    padding: 8px 16px; font-size: 13px; font-weight: 700;
+    border-radius: 5px; cursor: pointer; font-family: inherit;
+  }
+  .modal-footer .btn-cancel { background: #fff; color: #6B7280; border: 1px solid #D1D5DB; }
+  .modal-footer .btn-cancel:hover { background: #F3F4F6; }
+  .modal-footer .btn-ok { background: #1428A0; color: #fff; border: none; }
+  .modal-footer .btn-ok:hover { background: #0A1872; }
+  .help { font-size: 11px; color: #6B7280; margin-top: 4px; }
+  .computed {
+    background: #F3F4F6; border-radius: 4px;
+    padding: 6px 10px; font-size: 12px; color: #1428A0;
+    font-weight: 700; margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>DA사업부 업무 프로세스 시뮬레이터</h1>
+    <span class="meta">Node Removal Cost Saving Simulator · 60,000원/h 기준</span>
+  </header>
+
+  <!-- LEFT PANEL -->
+  <aside class="left">
+    <div class="panel-section">
+      <div class="panel-title">부서 필터</div>
+      <div class="filter-group" id="deptFilter"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">직군 필터</div>
+      <div class="filter-group" id="jobFilter"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">엣지 타입</div>
+      <div class="filter-group" id="edgeFilter"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-title">옵션</div>
+      <div class="filter-group">
+        <label>
+          <input type="checkbox" id="axOnly">
+          <span>AX 후보만 보기</span>
+        </label>
+      </div>
+    </div>
+  </aside>
+
+  <!-- CENTER -->
+  <div class="graph-wrap">
+    <div class="stats-banner">
+      <div class="stat-item"><div class="v" id="totalNodes">0</div><div class="l">전체 노드</div></div>
+      <div class="stat-item"><div class="v" id="visibleNodes">0</div><div class="l">표시 노드</div></div>
+      <div class="stat-item"><div class="v" id="totalHours">0h</div><div class="l">총 업무시간</div></div>
+      <div class="stat-item"><div class="v" id="totalCost">0원</div><div class="l">총 비용</div></div>
+    </div>
+    <div id="graph"></div>
+    <div class="legend">
+      <div style="font-weight:700; margin-bottom:6px; color:#1428A0; font-size:11px;">DA 사업부 풀 라이프사이클</div>
+      <div class="row"><div class="swatch" style="background:#E53935; height:5px;"></div>심각 병목 (≥100h)</div>
+      <div class="row"><div class="swatch" style="background:#EF5350; height:4px;"></div>주요 병목 (≥60h)</div>
+      <div class="row"><div class="swatch" style="background:#EF9A9A"></div>수동전달</div>
+      <div class="row"><div class="swatch" style="background:#A5D6A7"></div>자동전달</div>
+      <div class="row"><div class="swatch" style="background:#FFE082"></div>구두보고</div>
+      <div style="border-top:1px solid #E5E7EB; margin:6px 0; padding-top:6px; font-size:10px; color:#6B7280;">
+        ★ 화살표 길이 = 처리 시간(병목 크기)<br>
+        ★ 화살표 두께 = 시간 가중치<br>
+        ◆ 표시 엣지 = 사이클 클로즈 (피드백 루프)
+      </div>
+    </div>
+    <div class="toolbar">
+      <button id="addNodeBtn">+ 노드 추가</button>
+      <button id="addEdgeBtn" disabled>+ 엣지 연결</button>
+      <button id="bulkRemoveBtn" disabled>선택 일괄 제거</button>
+      <button id="fitBtn">화면 맞춤</button>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <aside class="right">
+    <div class="panel-title">절감 효과 (실시간)</div>
+
+    <div class="counter-card hours">
+      <div class="counter-label">연간 절감 시간</div>
+      <div class="counter-value" id="savedHours">0 h</div>
+      <div class="counter-sub">제거된 업무 + 연결 처리 시간</div>
+    </div>
+
+    <div class="counter-card cost">
+      <div class="counter-label">연간 절감 비용</div>
+      <div class="counter-value" id="savedCost">0 원</div>
+      <div class="counter-sub">시간 × 60,000원/h</div>
+    </div>
+
+    <div class="counter-card fte">
+      <div class="counter-label">FTE 절감</div>
+      <div class="counter-value" id="savedFTE">0.00 명</div>
+      <div class="counter-sub">2,080 h/년 기준</div>
+    </div>
+
+    <div class="selection-badge" id="selectionBadge">
+      <span id="selectionCount">0</span>개 노드 선택됨 (Shift+클릭)
+    </div>
+
+    <div class="panel-title" style="margin-top: 18px;">제거 이력</div>
+    <div class="removed-list" id="removedList"></div>
+
+    <button class="action-btn primary" id="exportBtn">결과 클립보드 복사</button>
+    <button class="action-btn secondary" id="undoAllBtn">전체 복원</button>
+    <button class="action-btn danger" id="resetBtn">시뮬레이션 초기화</button>
+  </aside>
+</div>
+
+<div class="ctx-menu" id="ctxMenu">
+  <div class="item danger" data-action="remove">이 노드 제거</div>
+  <div class="item" data-action="select-connected">연결 노드 모두 선택</div>
+  <div class="item" data-action="edit">노드 편집</div>
+  <div class="item" data-action="info">상세 정보</div>
+</div>
+
+<!-- Node Add/Edit Modal -->
+<div class="modal-backdrop" id="nodeModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="nodeModalTitle">새 노드 추가</span>
+      <button class="modal-close" data-close>&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="fld">업무명 *</label>
+        <input type="text" id="f_label" placeholder="예: 주간 KPI 리포트 작성">
+        <div class="help">줄바꿈은 \n 으로 입력</div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label class="fld">부서 *</label>
+          <input type="text" id="f_dept" placeholder="예: SCM기획팀" list="deptList">
+          <datalist id="deptList"></datalist>
+        </div>
+        <div class="field">
+          <label class="fld">담당자 페르소나</label>
+          <input type="text" id="f_persona" placeholder="예: 김SCM">
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label class="fld">직군 *</label>
+          <select id="f_job">
+            <option value="연구개발">연구개발</option>
+            <option value="생산·품질">생산·품질</option>
+            <option value="구매·SCM">구매·SCM</option>
+            <option value="영업·마케팅">영업·마케팅</option>
+            <option value="기획·전략">기획·전략</option>
+            <option value="서비스·CS">서비스·CS</option>
+            <option value="인사·총무">인사·총무</option>
+            <option value="IT·보안">IT·보안</option>
+            <option value="법무">법무</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="fld">연간 시간 (h) *</label>
+          <input type="number" id="f_hours" min="0" step="1" value="0">
+          <div class="computed" id="costPreview">연간 비용: 0 원</div>
+        </div>
+      </div>
+      <div class="field">
+        <label class="fld">사용 시스템</label>
+        <input type="text" id="f_system" placeholder="예: nERP, Excel">
+      </div>
+      <div class="field">
+        <label class="check-row">
+          <input type="checkbox" id="f_ax">
+          <span>AX 자동화 후보</span>
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" data-close>취소</button>
+      <button class="btn-ok" id="nodeSaveBtn">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edge Add Modal -->
+<div class="modal-backdrop" id="edgeModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span>엣지 연결</span>
+      <button class="modal-close" data-close>&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="row2">
+        <div class="field">
+          <label class="fld">출발 노드 (From) *</label>
+          <select id="f_from"></select>
+        </div>
+        <div class="field">
+          <label class="fld">도착 노드 (To) *</label>
+          <select id="f_to"></select>
+        </div>
+      </div>
+      <div class="field">
+        <label class="fld">연결 설명</label>
+        <input type="text" id="f_edgeLabel" placeholder="예: 불량데이터 전달">
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label class="fld">연간 처리시간 (h) *</label>
+          <input type="number" id="f_edgeHours" min="0" step="1" value="0">
+        </div>
+        <div class="field">
+          <label class="fld">전달 유형 *</label>
+          <select id="f_edgeType">
+            <option value="수동전달">수동전달 (Pain Point)</option>
+            <option value="자동전달">자동전달</option>
+            <option value="구두보고">구두보고</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" data-close>취소</button>
+      <button class="btn-ok" id="edgeSaveBtn">연결</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+//====================== CONSTANTS ======================
+const HOURLY_RATE = 60000;
+const FTE_HOURS = 2080;
+
+const JOB_COLORS = {
+  '연구개발':    '#1428A0',
+  '생산·품질':   '#2E7D32',
+  '구매·SCM':    '#E65100',
+  '영업·마케팅': '#C62828',
+  '기획·전략':   '#4A148C',
+  '서비스·CS':   '#00838F',
+  '인사·총무':   '#F9A825',
+  'IT·보안':     '#37474F',
+  '법무':        '#4E342E'
+};
+
+const EDGE_COLORS = {
+  '수동전달': '#EF9A9A',
+  '자동전달': '#A5D6A7',
+  '구두보고': '#FFE082'
+};
+
+// DA사업부 표준 조직 체계 — 부서 카탈로그 (직군별 그룹핑)
+const DEPT_CATALOG = {
+  '연구개발': [
+    '선행개발팀', '제품개발1팀', '제품개발2팀', '제품개발3팀',
+    'HW설계팀', 'SW개발팀', '펌웨어개발팀', '플랫폼개발팀',
+    'UX개발팀', '디자인팀', '시험인증팀', '특허기술팀'
+  ],
+  '생산·품질': [
+    '제조1팀', '제조2팀', '제조혁신팀', '생산기술팀',
+    '품질보증팀', '품질혁신팀', '신뢰성평가팀', '필드품질팀',
+    '안전환경팀', '설비기술팀'
+  ],
+  '구매·SCM': [
+    '구매팀', '전략구매팀', 'SCM기획팀', '수급관리팀',
+    '자재팀', '물류팀', '수출입팀', '협력사관리팀'
+  ],
+  '영업·마케팅': [
+    '국내영업팀', '해외영업팀(북미)', '해외영업팀(유럽)', '해외영업팀(아시아)',
+    '영업기획팀', '채널영업팀', '온라인영업팀', 'B2B영업팀',
+    '상품기획팀', '브랜드마케팅팀', '디지털마케팅팀', '콘텐츠팀'
+  ],
+  '기획·전략': [
+    '사업기획팀', '전략기획팀', '경영전략팀',
+    '재무팀', '경영관리팀', '원가기획팀', '투자기획팀'
+  ],
+  '서비스·CS': [
+    '서비스기획팀', 'CS운영팀', 'AS기술팀',
+    '콜센터운영', '서비스품질팀', '리퍼/RMA팀'
+  ],
+  '인사·총무': [
+    '인사기획팀', 'HRD교육팀', '노사협력팀', '조직문화팀',
+    '총무팀', '시설관리팀'
+  ],
+  'IT·보안': [
+    'IT인프라팀', '시스템운영팀', 'DX기획팀',
+    '데이터분석팀', '정보보안팀', 'AX추진사무국'
+  ],
+  '법무': [
+    '법무팀', '컴플라이언스팀', 'IP기획팀', '계약심사팀'
+  ]
+};
+
+const ALL_DEPTS = Object.values(DEPT_CATALOG).flat();
+const DEPT_TO_JOB = {};
+Object.keys(DEPT_CATALOG).forEach(j => DEPT_CATALOG[j].forEach(d => DEPT_TO_JOB[d] = j));
+
+//====================== SAMPLE DATA — DA 사업부 풀 라이프사이클 (촘촘한 현실 데이터) ======================
+const initialNodes = [
+  // ── PHASE 1: 소비자 인사이트 ──
+  { id: 'C01', label: '글로벌 시장\n트렌드 조사',   dept: '영업기획팀',     persona: '최영업', job_type: '영업·마케팅', hours_per_year: 280, system: 'NielsenIQ, GfK', ax_candidate: true },
+  { id: 'C02', label: '고객 VOC\n수집·정제',       dept: 'CS운영팀',       persona: '오CS',   job_type: '서비스·CS',   hours_per_year: 416, system: 'VOC시스템',     ax_candidate: true },
+  { id: 'C03', label: '채널 POS\n판매 데이터 수집', dept: '영업기획팀',     persona: '최영업', job_type: '영업·마케팅', hours_per_year: 312, system: 'GSCM, POS',    ax_candidate: true },
+  { id: 'C04', label: '경쟁사\n벤치마킹',         dept: '상품기획팀',     persona: '한기획', job_type: '영업·마케팅', hours_per_year: 208, system: 'PPT, 리포트',    ax_candidate: false },
+  { id: 'C05', label: '소셜/리뷰\n빅데이터 분석',   dept: '디지털마케팅팀', persona: '윤마케', job_type: '영업·마케팅', hours_per_year: 364, system: 'Brandwatch, GA',  ax_candidate: true },
+  { id: 'C06', label: '카테고리\n매트릭스 분석',   dept: '상품기획팀',     persona: '한기획', job_type: '영업·마케팅', hours_per_year: 156, system: 'Excel, BI',      ax_candidate: true },
+  { id: 'C07', label: '사용 패턴\n에스노그라피',   dept: 'UX개발팀',       persona: '예UX',   job_type: '연구개발',    hours_per_year: 240, system: '필드조사툴',    ax_candidate: false },
+  { id: 'C08', label: '페르소나\n카드 작성',       dept: 'UX개발팀',       persona: '예UX',   job_type: '연구개발',    hours_per_year: 100, system: 'Figma',         ax_candidate: false },
+  { id: 'C09', label: '글로벌 가전\n리포트 정리',  dept: '해외영업팀(북미)', persona: '제해외', job_type: '영업·마케팅', hours_per_year: 156, system: 'PPT',          ax_candidate: true },
+  { id: 'C10', label: '라이프스타일\n트렌드 큐레이션', dept: '디지털마케팅팀', persona: '윤마케', job_type: '영업·마케팅', hours_per_year: 180, system: 'Pinterest, IG', ax_candidate: true },
+  { id: 'C11', label: '옴니채널\n고객여정 매핑',     dept: 'UX개발팀',       persona: '예UX',   job_type: '연구개발',    hours_per_year: 200, system: 'Miro',         ax_candidate: false },
+  { id: 'C12', label: '산업 컨퍼런스\n참가/리포팅',  dept: '선행개발팀',     persona: '서선행', job_type: '연구개발',    hours_per_year: 120, system: 'PPT',          ax_candidate: false },
+  { id: 'C13', label: '심층 사용자\n인터뷰',        dept: 'UX개발팀',       persona: '예UX',   job_type: '연구개발',    hours_per_year: 280, system: '녹취록툴',     ax_candidate: false },
+  { id: 'C14', label: '산업 리포트\n구독/번역',     dept: '상품기획팀',     persona: '한기획', job_type: '영업·마케팅', hours_per_year: 156, system: 'DeepL',        ax_candidate: true },
+
+  // ── PHASE 2: POD/컨셉 발굴 ──
+  { id: 'P01', label: 'POD 도출\n워크샵',         dept: '상품기획팀',   persona: '한기획', job_type: '영업·마케팅', hours_per_year: 120, system: 'Miro, PPT',  ax_candidate: false },
+  { id: 'P02', label: '컨셉 검증\nFGI',           dept: '상품기획팀',   persona: '한기획', job_type: '영업·마케팅', hours_per_year: 240, system: 'FGI Lab',    ax_candidate: false },
+  { id: 'P03', label: '신제품 RFP\n작성',         dept: '사업기획팀',   persona: '강기획', job_type: '기획·전략',   hours_per_year: 240, system: 'Word, PPT',  ax_candidate: true },
+  { id: 'P04', label: '사업성 검토\n(NPV/IRR)',   dept: '경영전략팀',   persona: '서경영', job_type: '기획·전략',   hours_per_year: 200, system: 'Excel',      ax_candidate: true },
+  { id: 'P05', label: '컨셉\n임원 승인',          dept: '사업기획팀',   persona: '강기획', job_type: '기획·전략',   hours_per_year: 80,  system: 'PPT',        ax_candidate: false },
+  { id: 'P06', label: '컨셉 1차\n검토 미팅',      dept: '상품기획팀',   persona: '한기획', job_type: '영업·마케팅', hours_per_year: 160, system: '미팅, PPT',   ax_candidate: false },
+  { id: 'P07', label: '디자인 시안\n검토',        dept: '디자인팀',     persona: '권디자', job_type: '연구개발',    hours_per_year: 200, system: 'Figma',       ax_candidate: false },
+  { id: 'P08', label: '가격 포지셔닝\n검토',      dept: '원가기획팀',   persona: '엄원가', job_type: '기획·전략',   hours_per_year: 156, system: 'Excel',       ax_candidate: true },
+  { id: 'P09', label: '컨셉 키비주얼\n제작',      dept: '디자인팀',     persona: '권디자', job_type: '연구개발',    hours_per_year: 240, system: 'Figma, AdobeCC', ax_candidate: false },
+  { id: 'P10', label: '초기 ROI\n시나리오 산출',  dept: '재무팀',       persona: '하재무', job_type: '기획·전략',   hours_per_year: 180, system: 'Excel',         ax_candidate: true },
+  { id: 'P11', label: '시장 출시\n타임라인 작성', dept: '사업기획팀',   persona: '강기획', job_type: '기획·전략',   hours_per_year: 120, system: 'MS Project',    ax_candidate: false },
+  { id: 'P12', label: '컨셉별\n위험 평가',        dept: '전략기획팀',   persona: '백전략', job_type: '기획·전략',   hours_per_year: 140, system: 'Excel',         ax_candidate: false },
+  { id: 'P13', label: '마케팅 메시지\n초안',      dept: '브랜드마케팅팀', persona: '윤마케', job_type: '영업·마케팅', hours_per_year: 180, system: 'Word, PPT',     ax_candidate: false },
+
+  // ── PHASE 3: 상품기획 & 개발 ──
+  { id: 'D01', label: '상품기획서\n작성',         dept: '상품기획팀',   persona: '한기획', job_type: '영업·마케팅', hours_per_year: 280, system: 'PPT, Word',     ax_candidate: true },
+  { id: 'D02', label: '개발 일정\n수립',          dept: '제품개발1팀', persona: '노개발', job_type: '연구개발',    hours_per_year: 120, system: 'MS Project',     ax_candidate: false },
+  { id: 'D03', label: '외관 디자인\n& UX',        dept: '디자인팀',     persona: '권디자', job_type: '연구개발',    hours_per_year: 416, system: 'Figma, Rhino',  ax_candidate: false },
+  { id: 'D04', label: 'HW 설계\n총괄',            dept: 'HW설계팀',     persona: '문하드', job_type: '연구개발',    hours_per_year: 520, system: 'CATIA, OrCAD',  ax_candidate: false },
+  { id: 'D05', label: 'SW 개발',                 dept: 'SW개발팀',     persona: '신소프', job_type: '연구개발',    hours_per_year: 624, system: 'Git, Jira',     ax_candidate: true },
+  { id: 'D06', label: '펌웨어\n개발',             dept: '펌웨어개발팀', persona: '백펌웨', job_type: '연구개발',    hours_per_year: 520, system: 'IDE, Gerrit',   ax_candidate: true },
+  { id: 'D07', label: '시제품\n제작',             dept: '제품개발1팀', persona: '노개발', job_type: '연구개발',    hours_per_year: 360, system: '시제품Lab',     ax_candidate: false },
+  { id: 'D08', label: '설계 검증\nDR 리뷰',       dept: '제품개발1팀', persona: '노개발', job_type: '연구개발',    hours_per_year: 200, system: 'PLM',          ax_candidate: false },
+  { id: 'D09', label: '회로 설계\n(PCB)',         dept: 'HW설계팀',     persona: '문하드', job_type: '연구개발',    hours_per_year: 416, system: 'OrCAD, Allegro', ax_candidate: false },
+  { id: 'D10', label: '기구/구조\n설계',          dept: 'HW설계팀',     persona: '구기구', job_type: '연구개발',    hours_per_year: 416, system: 'CATIA',         ax_candidate: false },
+  { id: 'D11', label: 'IoT/연동\n프로토콜 설계',  dept: '플랫폼개발팀', persona: '편플랫', job_type: '연구개발',    hours_per_year: 312, system: 'SmartThings',   ax_candidate: true },
+  { id: 'D12', label: '음향/모터\n튜닝',          dept: '제품개발2팀', persona: '나음향', job_type: '연구개발',    hours_per_year: 280, system: '튜닝Lab',       ax_candidate: false },
+  { id: 'D13', label: '부품 사양서\n작성',        dept: '제품개발1팀', persona: '노개발', job_type: '연구개발',    hours_per_year: 240, system: 'Word, PLM',     ax_candidate: true },
+  { id: 'D14', label: 'DFM/DFA\n검토',           dept: '생산기술팀',   persona: '강생기', job_type: '생산·품질',   hours_per_year: 180, system: 'PLM',           ax_candidate: false },
+  { id: 'D15', label: '회로\n시뮬레이션',         dept: 'HW설계팀',     persona: '문하드', job_type: '연구개발',    hours_per_year: 240, system: 'SPICE',         ax_candidate: false },
+  { id: 'D16', label: 'PCB\n레이아웃',           dept: 'HW설계팀',     persona: '문하드', job_type: '연구개발',    hours_per_year: 312, system: 'Allegro',       ax_candidate: false },
+  { id: 'D17', label: '사출 금형\n설계',          dept: 'HW설계팀',     persona: '구기구', job_type: '연구개발',    hours_per_year: 280, system: 'CATIA',         ax_candidate: false },
+  { id: 'D18', label: 'SW 아키텍처\n설계',        dept: 'SW개발팀',     persona: '신소프', job_type: '연구개발',    hours_per_year: 240, system: 'PlantUML',      ax_candidate: false },
+  { id: 'D19', label: 'SW 단위\n테스트',          dept: 'SW개발팀',     persona: '강유닛', job_type: '연구개발',    hours_per_year: 360, system: 'Jest, JUnit',   ax_candidate: true },
+  { id: 'D20', label: 'SW 통합\n테스트',          dept: 'SW개발팀',     persona: '강유닛', job_type: '연구개발',    hours_per_year: 280, system: 'Jenkins',       ax_candidate: true },
+  { id: 'D21', label: 'AI/ML 모델\n개발',         dept: '플랫폼개발팀', persona: '편플랫', job_type: '연구개발',    hours_per_year: 416, system: 'PyTorch',       ax_candidate: false },
+  { id: 'D22', label: '시제품\n안전성 검토',      dept: '제품개발1팀', persona: '노개발', job_type: '연구개발',    hours_per_year: 156, system: 'PLM',           ax_candidate: false },
+  { id: 'D23', label: '사용자 매뉴얼\n초안 작성', dept: 'UX개발팀',     persona: '예UX',   job_type: '연구개발',    hours_per_year: 240, system: 'Word, MadCap',  ax_candidate: true },
+  { id: 'D24', label: 'IP 침해\n리스크 검토',     dept: 'IP기획팀',     persona: '한특허', job_type: '법무',        hours_per_year: 180, system: 'IP시스템',      ax_candidate: true },
+
+  // ── PHASE 4: 시험 & 인증 ──
+  { id: 'T01', label: '신뢰성\n평가',             dept: '신뢰성평가팀', persona: '구신뢰', job_type: '생산·품질', hours_per_year: 416, system: '신뢰성Lab',    ax_candidate: false },
+  { id: 'T02', label: '안전/환경\n인증',          dept: '시험인증팀',   persona: '추인증', job_type: '연구개발',  hours_per_year: 312, system: '인증포털',      ax_candidate: false },
+  { id: 'T03', label: '글로벌 규격\n테스트',      dept: '시험인증팀',   persona: '추인증', job_type: '연구개발',  hours_per_year: 364, system: 'UL, KC, CE',    ax_candidate: false },
+  { id: 'T04', label: 'EMC/EMI\n시험',           dept: '시험인증팀',   persona: '추인증', job_type: '연구개발',  hours_per_year: 208, system: 'EMC Lab',       ax_candidate: false },
+  { id: 'T05', label: '시험결과\n리뷰',           dept: '제품개발1팀', persona: '노개발', job_type: '연구개발',  hours_per_year: 156, system: 'PLM, PPT',     ax_candidate: false },
+  { id: 'T06', label: '가속수명\n시험(HALT)',     dept: '신뢰성평가팀', persona: '구신뢰', job_type: '생산·품질', hours_per_year: 312, system: 'HALT챔버',     ax_candidate: false },
+  { id: 'T07', label: '사용환경\n시뮬레이션',     dept: '신뢰성평가팀', persona: '구신뢰', job_type: '생산·품질', hours_per_year: 240, system: 'Lab',          ax_candidate: false },
+  { id: 'T08', label: '음향/소음\n시험',          dept: '시험인증팀',   persona: '추인증', job_type: '연구개발',  hours_per_year: 156, system: '무향실',        ax_candidate: false },
+  { id: 'T09', label: '기능 검증\n시험',          dept: '제품개발2팀', persona: '나음향', job_type: '연구개발',    hours_per_year: 312, system: 'Test Lab',      ax_candidate: false },
+  { id: 'T10', label: 'ESD/낙뢰\n시험',           dept: '시험인증팀',   persona: '추인증', job_type: '연구개발',    hours_per_year: 180, system: 'ESD Lab',       ax_candidate: false },
+  { id: 'T11', label: '분해 실험\n(DFM 검증)',    dept: '생산기술팀',   persona: '강생기', job_type: '생산·품질',   hours_per_year: 156, system: 'Lab',           ax_candidate: false },
+  { id: 'T12', label: '사용자\n베타 테스트',      dept: 'UX개발팀',     persona: '예UX',   job_type: '연구개발',    hours_per_year: 280, system: 'TestFlight, 설문', ax_candidate: false },
+
+  // ── PHASE 5: 양산 준비 ──
+  { id: 'M01', label: 'BOM\n확정',                dept: '제품개발1팀', persona: '노개발', job_type: '연구개발',    hours_per_year: 156, system: 'PLM',           ax_candidate: true },
+  { id: 'M02', label: '자재 소요계획\n(MRP)',     dept: '자재팀',       persona: '권자재', job_type: '구매·SCM',    hours_per_year: 312, system: 'nERP',          ax_candidate: true },
+  { id: 'M03', label: '협력사\n발주',             dept: '구매팀',       persona: '박구매', job_type: '구매·SCM',    hours_per_year: 416, system: 'nERP, GSRM',    ax_candidate: true },
+  { id: 'M04', label: '양산 라인\n셋업',          dept: '생산기술팀',   persona: '강생기', job_type: '생산·품질',   hours_per_year: 520, system: 'MES',           ax_candidate: false },
+  { id: 'M05', label: '작업표준서\n작성',         dept: '제조혁신팀',   persona: '오제조', job_type: '생산·품질',   hours_per_year: 240, system: 'Word, PLM',     ax_candidate: true },
+  { id: 'M06', label: '초도 양산\n(PP)',          dept: '제조1팀',     persona: '윤제조', job_type: '생산·품질',   hours_per_year: 312, system: 'MES',           ax_candidate: false },
+  { id: 'M07', label: '협력사\n품질 감사',        dept: '협력사관리팀', persona: '권협력', job_type: '구매·SCM',    hours_per_year: 312, system: 'GSRM, QMS',     ax_candidate: false },
+  { id: 'M08', label: '금형 발주\n/검수',         dept: '전략구매팀',   persona: '진전구', job_type: '구매·SCM',    hours_per_year: 240, system: 'nERP',          ax_candidate: false },
+  { id: 'M09', label: '작업자 교육\n/스킬 인증',  dept: 'HRD교육팀',    persona: '명교육', job_type: '인사·총무',   hours_per_year: 200, system: 'LMS',           ax_candidate: true },
+  { id: 'M10', label: 'SOP/운영지침\n등록',       dept: '제조혁신팀',   persona: '오제조', job_type: '생산·품질',   hours_per_year: 180, system: 'PLM',           ax_candidate: true },
+  { id: 'M11', label: '양산 도구\n/지그 설계',    dept: '생산기술팀',   persona: '강생기', job_type: '생산·품질',   hours_per_year: 280, system: 'CATIA',         ax_candidate: false },
+  { id: 'M12', label: '검사 장비\n자동화 셋업',   dept: '설비기술팀',   persona: '오설비', job_type: '생산·품질',   hours_per_year: 312, system: 'PLC, Vision',   ax_candidate: false },
+  { id: 'M13', label: '양산\n시뮬레이션',         dept: '생산기술팀',   persona: '강생기', job_type: '생산·품질',   hours_per_year: 200, system: 'FlexSim',       ax_candidate: false },
+  { id: 'M14', label: '패키징\n/라벨 디자인',     dept: '디자인팀',     persona: '권디자', job_type: '연구개발',    hours_per_year: 156, system: 'AdobeCC',       ax_candidate: false },
+
+  // ── PHASE 6: 본 양산 ──
+  { id: 'F01', label: '자재 입고\n/IQC 검수',     dept: '자재팀',       persona: '권자재', job_type: '구매·SCM',    hours_per_year: 312, system: 'nERP, QMS',     ax_candidate: true },
+  { id: 'F02', label: '본 양산\n운영',            dept: '제조1팀',     persona: '윤제조', job_type: '생산·품질',   hours_per_year: 720, system: 'MES, SCADA',    ax_candidate: false },
+  { id: 'F03', label: '공정 품질\n모니터링',      dept: '품질보증팀',   persona: '이품질', job_type: '생산·품질',   hours_per_year: 520, system: 'QMS, MES',      ax_candidate: true },
+  { id: 'F04', label: '완제품\nOQC 검사',         dept: '품질보증팀',   persona: '이품질', job_type: '생산·품질',   hours_per_year: 416, system: 'QMS',           ax_candidate: false },
+  { id: 'F05', label: '출하 검사\n/포장',         dept: '품질보증팀',   persona: '이품질', job_type: '생산·품질',   hours_per_year: 208, system: 'QMS, WMS',      ax_candidate: false },
+  { id: 'F06', label: 'SPC\n통계 분석',           dept: '품질혁신팀',   persona: '진혁신', job_type: '생산·품질',   hours_per_year: 312, system: 'Minitab',       ax_candidate: true },
+  { id: 'F07', label: '공정 변경\nECN 관리',      dept: '제조혁신팀',   persona: '오제조', job_type: '생산·품질',   hours_per_year: 240, system: 'PLM',           ax_candidate: true },
+  { id: 'F08', label: '일일 생산\n일보 작성',     dept: '제조1팀',     persona: '윤제조', job_type: '생산·품질',   hours_per_year: 416, system: 'Excel, MES',    ax_candidate: true },
+  { id: 'F09', label: '야간조\n인수인계',         dept: '제조2팀',     persona: '나야간', job_type: '생산·품질',   hours_per_year: 312, system: 'MES',           ax_candidate: true },
+  { id: 'F10', label: '주간 품질\n회의',          dept: '품질보증팀',   persona: '이품질', job_type: '생산·품질',   hours_per_year: 156, system: '미팅, PPT',     ax_candidate: false },
+  { id: 'F11', label: '라인 정지\n/리커버리',     dept: '설비기술팀',   persona: '오설비', job_type: '생산·품질',   hours_per_year: 280, system: 'CMMS',          ax_candidate: false },
+  { id: 'F12', label: '환경/안전\n점검',          dept: '안전환경팀',   persona: '한안전', job_type: '생산·품질',   hours_per_year: 240, system: 'EHS시스템',     ax_candidate: false },
+  { id: 'F13', label: '자재 재고\n회전 분석',     dept: '자재팀',       persona: '권자재', job_type: '구매·SCM',    hours_per_year: 200, system: 'nERP',          ax_candidate: true },
+
+  // ── PHASE 7: 물류 & 영업 ──
+  { id: 'L01', label: '출고 & 1차\n물류 운영',    dept: '물류팀',       persona: '한물류', job_type: '구매·SCM',    hours_per_year: 312, system: 'WMS, TMS',      ax_candidate: true },
+  { id: 'L02', label: '채널 배송\n/입고',         dept: '물류팀',       persona: '한물류', job_type: '구매·SCM',    hours_per_year: 208, system: 'TMS',           ax_candidate: false },
+  { id: 'L03', label: '가격 정책\n수립',          dept: '영업기획팀',   persona: '최영업', job_type: '영업·마케팅', hours_per_year: 240, system: 'Excel',         ax_candidate: false },
+  { id: 'L04', label: '마케팅\n캠페인 기획',      dept: '브랜드마케팅팀', persona: '윤마케', job_type: '영업·마케팅', hours_per_year: 416, system: 'PPT, 광고툴',   ax_candidate: false },
+  { id: 'L05', label: '오프라인\n채널 영업',      dept: '채널영업팀',   persona: '임채널', job_type: '영업·마케팅', hours_per_year: 416, system: 'CRM',           ax_candidate: false },
+  { id: 'L06', label: '온라인\n판매 운영',        dept: '온라인영업팀', persona: '도온라', job_type: '영업·마케팅', hours_per_year: 364, system: 'Shop, GA',      ax_candidate: true },
+  { id: 'L07', label: 'PSI 주간\n계획 수립',      dept: 'SCM기획팀',   persona: '김SCM',  job_type: '구매·SCM',    hours_per_year: 416, system: 'GSCM, Excel',   ax_candidate: true },
+  { id: 'L08', label: '광고 소재\n제작',          dept: '콘텐츠팀',     persona: '안콘텐', job_type: '영업·마케팅', hours_per_year: 312, system: 'AdobeCC',       ax_candidate: false },
+  { id: 'L09', label: '인플루언서\n/리뷰 운영',   dept: '디지털마케팅팀', persona: '윤마케', job_type: '영업·마케팅', hours_per_year: 240, system: 'CRM, SNS',      ax_candidate: false },
+  { id: 'L10', label: '채널 인센티브\n정산',      dept: '영업기획팀',   persona: '최영업', job_type: '영업·마케팅', hours_per_year: 280, system: 'Excel, nERP',   ax_candidate: true },
+  { id: 'L11', label: '매장 진열\n/POP 운영',     dept: '채널영업팀',   persona: '임채널', job_type: '영업·마케팅', hours_per_year: 240, system: 'CRM, 사진보고', ax_candidate: false },
+  { id: 'L12', label: '영업사원\n교육',           dept: 'HRD교육팀',    persona: '명교육', job_type: '인사·총무',   hours_per_year: 180, system: 'LMS',           ax_candidate: false },
+  { id: 'L13', label: '수출 통관\n/관세 처리',    dept: '수출입팀',     persona: '편수출', job_type: '구매·SCM',    hours_per_year: 312, system: '관세시스템',    ax_candidate: true },
+  { id: 'L14', label: '신제품 발표회\n(PRESS)',   dept: '브랜드마케팅팀', persona: '윤마케', job_type: '영업·마케팅', hours_per_year: 200, system: 'PPT, 라이브',   ax_candidate: false },
+  { id: 'L15', label: 'B2B 대형\n거래처 운영',    dept: 'B2B영업팀',    persona: '도B2B',  job_type: '영업·마케팅', hours_per_year: 416, system: 'CRM',           ax_candidate: false },
+  { id: 'L16', label: '채널별 재고\n모니터링',    dept: 'SCM기획팀',   persona: '김SCM',  job_type: '구매·SCM',    hours_per_year: 312, system: 'GSCM',          ax_candidate: true },
+
+  // ── PHASE 8: 서비스 & 품질 피드백 ──
+  { id: 'S01', label: '고객 VOC\n접수',           dept: 'CS운영팀',     persona: '오CS',   job_type: '서비스·CS',   hours_per_year: 520, system: 'VOC시스템',     ax_candidate: true },
+  { id: 'S02', label: 'AS 접수\n/처리',           dept: 'AS기술팀',     persona: '천기사', job_type: '서비스·CS',   hours_per_year: 624, system: 'AS시스템',      ax_candidate: false },
+  { id: 'S03', label: '필드 불량\n원인 분석',     dept: '필드품질팀',   persona: '주필드', job_type: '생산·품질',   hours_per_year: 416, system: 'QMS, Lab',      ax_candidate: false },
+  { id: 'S04', label: '8D 보고서\n작성',          dept: '품질혁신팀',   persona: '진혁신', job_type: '생산·품질',   hours_per_year: 520, system: 'Word, QMS',     ax_candidate: true },
+  { id: 'S05', label: 'GQP\n등록',                dept: '품질혁신팀',   persona: '진혁신', job_type: '생산·품질',   hours_per_year: 156, system: 'GQP',           ax_candidate: true },
+  { id: 'S06', label: '시정조치\n확인',           dept: '필드품질팀',   persona: '주필드', job_type: '생산·품질',   hours_per_year: 208, system: 'QMS',           ax_candidate: false },
+  { id: 'S07', label: '콜센터 인입\n분석',        dept: '콜센터운영',   persona: '하콜센', job_type: '서비스·CS',   hours_per_year: 312, system: '콜시스템',      ax_candidate: true },
+  { id: 'S08', label: '출장 AS\n일정 관리',       dept: 'AS기술팀',     persona: '천기사', job_type: '서비스·CS',   hours_per_year: 240, system: 'AS시스템',      ax_candidate: true },
+  { id: 'S09', label: '부품 재고\n/RMA 관리',     dept: '리퍼/RMA팀',   persona: '추RMA',  job_type: '서비스·CS',   hours_per_year: 280, system: 'WMS, AS',       ax_candidate: false },
+  { id: 'S10', label: '자가서비스\n챗봇 운영',    dept: 'CS운영팀',     persona: '오CS',   job_type: '서비스·CS',   hours_per_year: 200, system: 'AI챗봇',        ax_candidate: true },
+  { id: 'S11', label: '보증/리퍼\n정책 운영',     dept: '서비스기획팀', persona: '강서비', job_type: '서비스·CS',   hours_per_year: 240, system: 'AS시스템',      ax_candidate: false },
+  { id: 'S12', label: '서비스 만족도\n조사',      dept: '서비스품질팀', persona: '윤서질', job_type: '서비스·CS',   hours_per_year: 156, system: '설문툴',        ax_candidate: true },
+  { id: 'S13', label: '서비스 부품\n재고 예측',   dept: '리퍼/RMA팀',   persona: '추RMA',  job_type: '서비스·CS',   hours_per_year: 240, system: 'BI, Excel',     ax_candidate: true },
+  { id: 'S14', label: 'AS 기사\n스케줄링',        dept: 'AS기술팀',     persona: '천기사', job_type: '서비스·CS',   hours_per_year: 312, system: 'AS시스템',      ax_candidate: true },
+
+  // ── PHASE 9: 분석 & 사이클 피드백 ──
+  { id: 'A01', label: '판매 데이터\n분석',        dept: '데이터분석팀', persona: '안데이', job_type: 'IT·보안',     hours_per_year: 416, system: 'BI, Tableau',   ax_candidate: true },
+  { id: 'A02', label: '매출/손익표\n작성',        dept: '영업기획팀',   persona: '최영업', job_type: '영업·마케팅', hours_per_year: 520, system: 'Excel',         ax_candidate: true },
+  { id: 'A03', label: '사업부 검토\n회의',        dept: '사업기획팀',   persona: '강기획', job_type: '기획·전략',   hours_per_year: 208, system: '미팅',          ax_candidate: false },
+  { id: 'A04', label: '임원 보고\n자료 작성',     dept: '영업기획팀',   persona: '최영업', job_type: '영업·마케팅', hours_per_year: 416, system: 'PPT',           ax_candidate: false },
+  { id: 'A05', label: '차기 트렌드\n인사이트 도출', dept: 'DX기획팀',     persona: '류DX',   job_type: 'IT·보안',     hours_per_year: 240, system: 'BI, AI툴',     ax_candidate: true },
+  { id: 'A06', label: '주간 KPI\n대시보드 갱신',  dept: '데이터분석팀', persona: '안데이', job_type: 'IT·보안',     hours_per_year: 312, system: 'Tableau',       ax_candidate: true },
+  { id: 'A07', label: '모델별\n수익성 분석',      dept: '원가기획팀',   persona: '엄원가', job_type: '기획·전략',   hours_per_year: 364, system: 'Excel',         ax_candidate: true },
+  { id: 'A08', label: 'ESG/지속가능성\n보고',     dept: '경영전략팀',   persona: '서경영', job_type: '기획·전략',   hours_per_year: 240, system: 'Word, PPT',     ax_candidate: false },
+  { id: 'A09', label: '일일 영업\n마감',          dept: '영업기획팀',   persona: '최영업', job_type: '영업·마케팅', hours_per_year: 364, system: 'GSCM, Excel',   ax_candidate: true },
+  { id: 'A10', label: '주간 사업부\n동향 보고',   dept: '사업기획팀',   persona: '강기획', job_type: '기획·전략',   hours_per_year: 312, system: 'PPT',           ax_candidate: true },
+  { id: 'A11', label: '모델별\n재고일 분석',      dept: 'SCM기획팀',   persona: '김SCM',  job_type: '구매·SCM',    hours_per_year: 240, system: 'BI, Excel',     ax_candidate: true },
+  { id: 'A12', label: '마진 압박\n시뮬레이션',    dept: '원가기획팀',   persona: '엄원가', job_type: '기획·전략',   hours_per_year: 200, system: 'Excel',         ax_candidate: true },
+  { id: 'A13', label: '사후평가\n(포스트모템)',   dept: 'DX기획팀',     persona: '류DX',   job_type: 'IT·보안',     hours_per_year: 156, system: 'Confluence',    ax_candidate: false },
+
+  // ── PHASE 10: 백오피스 (Cross-Cutting) ──
+  { id: 'B01', label: '인사 발령\n/배치',         dept: '인사기획팀',   persona: '도인사', job_type: '인사·총무',   hours_per_year: 280, system: 'HR시스템',      ax_candidate: true },
+  { id: 'B02', label: '신입 OJT\n프로그램',       dept: 'HRD교육팀',    persona: '명교육', job_type: '인사·총무',   hours_per_year: 200, system: 'LMS',           ax_candidate: false },
+  { id: 'B03', label: '협력사 계약\n심사',        dept: '계약심사팀',   persona: '주계약', job_type: '법무',        hours_per_year: 312, system: '계약시스템',    ax_candidate: true },
+  { id: 'B04', label: '특허 출원\n검토',          dept: 'IP기획팀',     persona: '한특허', job_type: '법무',        hours_per_year: 240, system: 'IP시스템',      ax_candidate: true },
+  { id: 'B05', label: '제조원가\n계산/분석',      dept: '원가기획팀',   persona: '엄원가', job_type: '기획·전략',   hours_per_year: 416, system: 'Excel, nERP',   ax_candidate: true },
+  { id: 'B06', label: '월/분기\n결산',            dept: '재무팀',       persona: '하재무', job_type: '기획·전략',   hours_per_year: 520, system: 'nERP',          ax_candidate: true },
+  { id: 'B07', label: 'ERP 마스터\n정합성 점검',  dept: '시스템운영팀', persona: '오시스', job_type: 'IT·보안',     hours_per_year: 312, system: 'nERP',          ax_candidate: true },
+  { id: 'B08', label: '데이터\n거버넌스',         dept: '정보보안팀',   persona: '권보안', job_type: 'IT·보안',     hours_per_year: 240, system: 'DLP, IAM',      ax_candidate: false },
+  { id: 'B09', label: '인재 채용\n운영',          dept: '인사기획팀',   persona: '도인사', job_type: '인사·총무',   hours_per_year: 416, system: 'ATS',           ax_candidate: true },
+  { id: 'B10', label: '노사 단체\n협의',          dept: '노사협력팀',   persona: '주노사', job_type: '인사·총무',   hours_per_year: 240, system: '미팅',          ax_candidate: false },
+  { id: 'B11', label: '사내 보안\n교육',          dept: '정보보안팀',   persona: '권보안', job_type: 'IT·보안',     hours_per_year: 156, system: 'LMS',           ax_candidate: true },
+  { id: 'B12', label: '리더십\n코칭',             dept: '조직문화팀',   persona: '안조직', job_type: '인사·총무',   hours_per_year: 200, system: '미팅',          ax_candidate: false },
+  { id: 'B13', label: '윤리/컴플라이언스\n점검',  dept: '컴플라이언스팀', persona: '경컴플', job_type: '법무',        hours_per_year: 240, system: 'GRC시스템',     ax_candidate: true },
+  { id: 'B14', label: '시설/사옥\n관리',          dept: '시설관리팀',   persona: '도시설', job_type: '인사·총무',   hours_per_year: 312, system: 'CMMS',          ax_candidate: false }
+];
+
+initialNodes.forEach(n => n.cost_per_year = n.hours_per_year * HOURLY_RATE);
+
+const initialEdges = [
+  // ── PHASE 1 내부: 인사이트 데이터 통합 ──
+  { id: 'e001', from: 'C01', to: 'C04', label: '시장정보 공유',       hours: 39,  transfer_type: '자동전달' },
+  { id: 'e002', from: 'C03', to: 'C01', label: '판매트렌드 입력',     hours: 52,  transfer_type: '수동전달' },
+  { id: 'e003', from: 'C05', to: 'C04', label: '소셜 인사이트 공유',  hours: 39,  transfer_type: '자동전달' },
+  { id: 'e004', from: 'C09', to: 'C01', label: '글로벌 리포트',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e005', from: 'C07', to: 'C08', label: '에스노 → 페르소나',   hours: 78,  transfer_type: '수동전달' },
+  { id: 'e006', from: 'C02', to: 'C07', label: 'VOC → 사용패턴',     hours: 52,  transfer_type: '수동전달' },
+  { id: 'e007', from: 'C06', to: 'C04', label: '카테고리 매트릭스',   hours: 39,  transfer_type: '자동전달' },
+
+  // ── 1: 소비자 인사이트 → POD ──
+  { id: 'e010', from: 'C01', to: 'P01', label: '트렌드 인사이트',     hours: 104, transfer_type: '수동전달' },
+  { id: 'e011', from: 'C02', to: 'P01', label: 'VOC 정리본',          hours: 156, transfer_type: '수동전달' },
+  { id: 'e012', from: 'C03', to: 'P02', label: 'POS 데이터',          hours: 78,  transfer_type: '수동전달' },
+  { id: 'e013', from: 'C04', to: 'P01', label: '경쟁 인사이트',       hours: 104, transfer_type: '수동전달' },
+  { id: 'e014', from: 'C05', to: 'P01', label: '온라인 트렌드',       hours: 78,  transfer_type: '자동전달' },
+  { id: 'e015', from: 'C08', to: 'P01', label: '페르소나 입력',       hours: 78,  transfer_type: '수동전달' },
+  { id: 'e016', from: 'C06', to: 'P02', label: '카테고리 → FGI',      hours: 52,  transfer_type: '수동전달' },
+  { id: 'e017', from: 'C09', to: 'P03', label: '글로벌 리포트 → RFP', hours: 78,  transfer_type: '수동전달' },
+  { id: 'e018', from: 'C02', to: 'S03', label: 'VOC 품질 이슈',       hours: 52,  transfer_type: '자동전달' },
+
+  // ── 2: POD → 컨셉 → 사업성 ──
+  { id: 'e020', from: 'P01', to: 'P06', label: '워크샵 결과',         hours: 39,  transfer_type: '구두보고' },
+  { id: 'e021', from: 'P06', to: 'P02', label: '컨셉 후보 → FGI',     hours: 52,  transfer_type: '수동전달' },
+  { id: 'e022', from: 'P02', to: 'P03', label: 'FGI 결과',            hours: 104, transfer_type: '수동전달' },
+  { id: 'e023', from: 'P07', to: 'P03', label: '디자인 시안 반영',    hours: 78,  transfer_type: '수동전달' },
+  { id: 'e024', from: 'P03', to: 'P04', label: 'RFP & 사업성요청',    hours: 156, transfer_type: '수동전달' },
+  { id: 'e025', from: 'P03', to: 'P08', label: '가격 포지셔닝 의뢰',  hours: 78,  transfer_type: '수동전달' },
+  { id: 'e026', from: 'P08', to: 'P04', label: '가격 → 사업성',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e027', from: 'P04', to: 'P05', label: '사업성 결과',         hours: 52,  transfer_type: '구두보고' },
+  { id: 'e028', from: 'P05', to: 'D01', label: '컨셉 확정',           hours: 78,  transfer_type: '자동전달' },
+  { id: 'e029', from: 'P07', to: 'D03', label: '시안 → 외관 디자인',  hours: 78,  transfer_type: '수동전달' },
+
+  // ── 3: 상품기획 → 개발 ──
+  { id: 'e030', from: 'D01', to: 'D02', label: '기획서 → 일정',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e031', from: 'D02', to: 'D03', label: '디자인 발의',         hours: 52,  transfer_type: '자동전달' },
+  { id: 'e032', from: 'D02', to: 'D04', label: 'HW 발의',             hours: 78,  transfer_type: '수동전달' },
+  { id: 'e033', from: 'D02', to: 'D05', label: 'SW 발의',             hours: 78,  transfer_type: '수동전달' },
+  { id: 'e034', from: 'D02', to: 'D06', label: 'FW 발의',             hours: 78,  transfer_type: '수동전달' },
+  { id: 'e035', from: 'D02', to: 'D11', label: 'IoT 발의',            hours: 52,  transfer_type: '수동전달' },
+  { id: 'e036', from: 'D03', to: 'D04', label: '디자인-HW 연동',      hours: 156, transfer_type: '수동전달' },
+  { id: 'e037', from: 'D03', to: 'D10', label: '디자인 → 기구',       hours: 104, transfer_type: '수동전달' },
+  { id: 'e038', from: 'D04', to: 'D09', label: 'HW → 회로',           hours: 78,  transfer_type: '수동전달' },
+  { id: 'e039', from: 'D04', to: 'D10', label: 'HW → 기구',           hours: 78,  transfer_type: '수동전달' },
+  { id: 'e040', from: 'D04', to: 'D12', label: 'HW → 음향/모터',      hours: 78,  transfer_type: '수동전달' },
+  { id: 'e041', from: 'D09', to: 'D13', label: '회로 부품 사양',      hours: 52,  transfer_type: '수동전달' },
+  { id: 'e042', from: 'D10', to: 'D13', label: '기구 부품 사양',      hours: 52,  transfer_type: '수동전달' },
+  { id: 'e043', from: 'D04', to: 'D05', label: 'HW 스펙 전달',        hours: 104, transfer_type: '수동전달' },
+  { id: 'e044', from: 'D04', to: 'D07', label: 'HW → 시제품',         hours: 104, transfer_type: '수동전달' },
+  { id: 'e045', from: 'D05', to: 'D06', label: 'SW-FW 인터페이스',    hours: 104, transfer_type: '수동전달' },
+  { id: 'e046', from: 'D05', to: 'D11', label: 'SW-IoT 연동',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e047', from: 'D06', to: 'D11', label: 'FW-IoT 통신',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e048', from: 'D05', to: 'D07', label: 'SW 통합',             hours: 78,  transfer_type: '수동전달' },
+  { id: 'e049', from: 'D06', to: 'D07', label: 'FW 탑재',             hours: 78,  transfer_type: '수동전달' },
+  { id: 'e050', from: 'D11', to: 'D07', label: 'IoT 통합 시제',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e051', from: 'D12', to: 'D07', label: '튜닝 → 시제품',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e052', from: 'D13', to: 'M01', label: '부품 사양 → BOM',     hours: 78,  transfer_type: '수동전달' },
+  { id: 'e053', from: 'D07', to: 'D14', label: '시제품 → DFM',        hours: 52,  transfer_type: '수동전달' },
+  { id: 'e054', from: 'D14', to: 'D04', label: 'DFM 피드백',          hours: 104, transfer_type: '수동전달' },
+  { id: 'e055', from: 'D07', to: 'D08', label: '시제품 → DR',         hours: 52,  transfer_type: '자동전달' },
+
+  // ── 4: 시험 & 인증 ──
+  { id: 'e060', from: 'D08', to: 'T01', label: 'DR 통과 → 시험',      hours: 78,  transfer_type: '자동전달' },
+  { id: 'e061', from: 'D07', to: 'T01', label: '시제품 → 신뢰성',     hours: 104, transfer_type: '수동전달' },
+  { id: 'e062', from: 'T01', to: 'T06', label: '신뢰성 → HALT',       hours: 52,  transfer_type: '자동전달' },
+  { id: 'e063', from: 'T01', to: 'T07', label: '신뢰성 → 환경시뮬',   hours: 52,  transfer_type: '자동전달' },
+  { id: 'e064', from: 'D12', to: 'T08', label: '음향 → 소음 시험',    hours: 52,  transfer_type: '수동전달' },
+  { id: 'e065', from: 'T01', to: 'T02', label: '신뢰성 통과',         hours: 78,  transfer_type: '자동전달' },
+  { id: 'e066', from: 'T01', to: 'T03', label: '글로벌 규격 의뢰',    hours: 78,  transfer_type: '자동전달' },
+  { id: 'e067', from: 'T03', to: 'T04', label: 'EMC 시험',            hours: 52,  transfer_type: '자동전달' },
+  { id: 'e068', from: 'T01', to: 'T05', label: '시험 결과',           hours: 104, transfer_type: '수동전달' },
+  { id: 'e069', from: 'T02', to: 'T05', label: '인증 결과',           hours: 78,  transfer_type: '수동전달' },
+  { id: 'e070', from: 'T06', to: 'T05', label: 'HALT 결과',           hours: 52,  transfer_type: '수동전달' },
+  { id: 'e071', from: 'T07', to: 'T05', label: '환경 결과',           hours: 52,  transfer_type: '수동전달' },
+  { id: 'e072', from: 'T08', to: 'T05', label: '소음 결과',           hours: 39,  transfer_type: '수동전달' },
+  { id: 'e073', from: 'T05', to: 'D08', label: 'NG → 재설계 루프',    hours: 208, transfer_type: '수동전달' },
+
+  // ── 5: 양산 준비 ──
+  { id: 'e080', from: 'T05', to: 'M01', label: '양산 GO',             hours: 78,  transfer_type: '자동전달' },
+  { id: 'e081', from: 'D08', to: 'M01', label: '설계 BOM',            hours: 52,  transfer_type: '자동전달' },
+  { id: 'e082', from: 'M01', to: 'M02', label: 'BOM → MRP',           hours: 52,  transfer_type: '자동전달' },
+  { id: 'e083', from: 'M02', to: 'M03', label: '소요량 → 발주',       hours: 104, transfer_type: '수동전달' },
+  { id: 'e084', from: 'M02', to: 'M08', label: '금형 발주 의뢰',      hours: 78,  transfer_type: '수동전달' },
+  { id: 'e085', from: 'M01', to: 'M04', label: 'BOM → 라인 셋업',     hours: 104, transfer_type: '수동전달' },
+  { id: 'e086', from: 'M04', to: 'M05', label: '라인 → 표준서',       hours: 104, transfer_type: '수동전달' },
+  { id: 'e087', from: 'M05', to: 'M09', label: '표준서 → 교육',       hours: 78,  transfer_type: '수동전달' },
+  { id: 'e088', from: 'M05', to: 'M06', label: '표준서 → PP',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e089', from: 'M03', to: 'M07', label: '발주 → 협력사 감사',  hours: 78,  transfer_type: '수동전달' },
+  { id: 'e090', from: 'M07', to: 'M03', label: '감사결과 → 발주확정', hours: 52,  transfer_type: '수동전달' },
+  { id: 'e091', from: 'M08', to: 'F01', label: '금형 입고',           hours: 52,  transfer_type: '자동전달' },
+  { id: 'e092', from: 'M09', to: 'F02', label: '교육 완료 → 양산',    hours: 39,  transfer_type: '자동전달' },
+  { id: 'e093', from: 'M06', to: 'F02', label: 'PP 통과 → 양산',      hours: 104, transfer_type: '자동전달' },
+  { id: 'e094', from: 'M03', to: 'F01', label: '발주 → 입고',         hours: 78,  transfer_type: '자동전달' },
+
+  // ── 6: 본 양산 ──
+  { id: 'e100', from: 'F01', to: 'F02', label: '자재 투입',           hours: 52,  transfer_type: '자동전달' },
+  { id: 'e101', from: 'F02', to: 'F03', label: '공정 데이터',         hours: 52,  transfer_type: '자동전달' },
+  { id: 'e102', from: 'F02', to: 'F04', label: '완제품',              hours: 78,  transfer_type: '자동전달' },
+  { id: 'e103', from: 'F02', to: 'F08', label: '실적 → 일보',         hours: 39,  transfer_type: '수동전달' },
+  { id: 'e104', from: 'F03', to: 'F04', label: '품질 알람',           hours: 52,  transfer_type: '자동전달' },
+  { id: 'e105', from: 'F03', to: 'F06', label: '공정 데이터 → SPC',   hours: 52,  transfer_type: '자동전달' },
+  { id: 'e106', from: 'F06', to: 'F07', label: 'SPC 이상 → ECN',      hours: 78,  transfer_type: '수동전달' },
+  { id: 'e107', from: 'F07', to: 'F02', label: 'ECN → 양산 반영',     hours: 104, transfer_type: '수동전달' },
+  { id: 'e108', from: 'F04', to: 'F05', label: '검사 통과',           hours: 39,  transfer_type: '자동전달' },
+  { id: 'e109', from: 'F03', to: 'S04', label: '공정 불량 → 8D',      hours: 104, transfer_type: '수동전달' },
+  { id: 'e110', from: 'F05', to: 'L01', label: '출하 준비 완료',      hours: 52,  transfer_type: '자동전달' },
+  { id: 'e111', from: 'F08', to: 'A06', label: '일보 → KPI',          hours: 39,  transfer_type: '자동전달' },
+
+  // ── 7: 물류 & 영업 ──
+  { id: 'e120', from: 'L07', to: 'M02', label: 'PSI → MRP 입력',      hours: 78,  transfer_type: '수동전달' },
+  { id: 'e121', from: 'L07', to: 'F02', label: '생산계획 시그널',     hours: 52,  transfer_type: '수동전달' },
+  { id: 'e122', from: 'L01', to: 'L02', label: '운송',                hours: 52,  transfer_type: '자동전달' },
+  { id: 'e123', from: 'L02', to: 'L05', label: '오프 매장 입고',      hours: 52,  transfer_type: '자동전달' },
+  { id: 'e124', from: 'L02', to: 'L06', label: '온라인 풀필먼트',     hours: 52,  transfer_type: '자동전달' },
+  { id: 'e125', from: 'L03', to: 'L05', label: '가격 정책 적용',      hours: 78,  transfer_type: '수동전달' },
+  { id: 'e126', from: 'L03', to: 'L06', label: '온라인 가격',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e127', from: 'L04', to: 'L08', label: '캠페인 → 소재 의뢰',  hours: 52,  transfer_type: '수동전달' },
+  { id: 'e128', from: 'L08', to: 'L04', label: '소재 납품',           hours: 52,  transfer_type: '수동전달' },
+  { id: 'e129', from: 'L04', to: 'L09', label: '인플루언서 운영',     hours: 52,  transfer_type: '수동전달' },
+  { id: 'e130', from: 'L04', to: 'L05', label: '캠페인 → 매장',       hours: 104, transfer_type: '수동전달' },
+  { id: 'e131', from: 'L04', to: 'L06', label: '캠페인 → 온라인',     hours: 78,  transfer_type: '자동전달' },
+  { id: 'e132', from: 'L09', to: 'C05', label: '리뷰 인플 데이터',    hours: 39,  transfer_type: '자동전달' },
+  { id: 'e133', from: 'L05', to: 'L10', label: '판매 → 인센티브 정산', hours: 52,  transfer_type: '수동전달' },
+  { id: 'e134', from: 'L10', to: 'B06', label: '정산 → 결산',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e135', from: 'L05', to: 'A01', label: '오프 판매실적',       hours: 104, transfer_type: '수동전달' },
+  { id: 'e136', from: 'L06', to: 'A01', label: '온라인 실적',         hours: 78,  transfer_type: '자동전달' },
+  { id: 'e137', from: 'L05', to: 'L07', label: '판매실적 → PSI',      hours: 52,  transfer_type: '수동전달' },
+  { id: 'e138', from: 'L06', to: 'L07', label: '온라인 → PSI',        hours: 39,  transfer_type: '자동전달' },
+
+  // ── 8: 영업 → 서비스 ──
+  { id: 'e150', from: 'L05', to: 'S01', label: '판매처 VOC',          hours: 156, transfer_type: '수동전달' },
+  { id: 'e151', from: 'L06', to: 'S01', label: '온라인 리뷰',         hours: 78,  transfer_type: '자동전달' },
+  { id: 'e152', from: 'S01', to: 'S07', label: 'VOC → 콜분석',        hours: 52,  transfer_type: '자동전달' },
+  { id: 'e153', from: 'S07', to: 'C02', label: '콜 인입 → VOC',       hours: 39,  transfer_type: '자동전달' },
+  { id: 'e154', from: 'S01', to: 'S02', label: 'AS 의뢰',             hours: 104, transfer_type: '수동전달' },
+  { id: 'e155', from: 'S02', to: 'S08', label: '출장 일정 발생',      hours: 52,  transfer_type: '자동전달' },
+  { id: 'e156', from: 'S08', to: 'S09', label: '부품 요청',           hours: 52,  transfer_type: '수동전달' },
+  { id: 'e157', from: 'S09', to: 'S02', label: '부품 공급',           hours: 39,  transfer_type: '자동전달' },
+  { id: 'e158', from: 'S01', to: 'S03', label: 'VOC → 품질팀',        hours: 104, transfer_type: '수동전달' },
+  { id: 'e159', from: 'S02', to: 'S03', label: 'AS 데이터',           hours: 78,  transfer_type: '수동전달' },
+  { id: 'e160', from: 'S03', to: 'S04', label: '원인 → 8D',           hours: 208, transfer_type: '수동전달' },
+  { id: 'e161', from: 'S04', to: 'S05', label: '8D → GQP',            hours: 78,  transfer_type: '수동전달' },
+  { id: 'e162', from: 'S05', to: 'S06', label: '시정조치 추적',       hours: 52,  transfer_type: '자동전달' },
+  { id: 'e163', from: 'S04', to: 'F03', label: '시정조치 → 공정',     hours: 78,  transfer_type: '구두보고' },
+  { id: 'e164', from: 'S04', to: 'F07', label: '시정 → ECN',          hours: 52,  transfer_type: '수동전달' },
+  { id: 'e165', from: 'S04', to: 'D08', label: '필드불량 → 재설계',   hours: 156, transfer_type: '수동전달' },
+
+  // ── 9: 분석 & 사이클 클로즈 ──
+  { id: 'e180', from: 'A01', to: 'A02', label: '실적 → 손익',         hours: 104, transfer_type: '수동전달' },
+  { id: 'e181', from: 'A01', to: 'A06', label: '실적 → KPI',          hours: 52,  transfer_type: '자동전달' },
+  { id: 'e182', from: 'A02', to: 'A07', label: '손익 → 수익성',       hours: 78,  transfer_type: '수동전달' },
+  { id: 'e183', from: 'A07', to: 'A03', label: '수익성 → 검토',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e184', from: 'A02', to: 'A03', label: '손익 검토',           hours: 78,  transfer_type: '수동전달' },
+  { id: 'e185', from: 'A03', to: 'A04', label: '검토 결과 정리',      hours: 104, transfer_type: '수동전달' },
+  { id: 'e186', from: 'A04', to: 'A05', label: '경영 의사결정',       hours: 52,  transfer_type: '구두보고' },
+  { id: 'e187', from: 'A06', to: 'A04', label: 'KPI → 임원 보고',     hours: 39,  transfer_type: '자동전달' },
+  { id: 'e188', from: 'A08', to: 'A04', label: 'ESG → 임원 보고',     hours: 52,  transfer_type: '수동전달' },
+  { id: 'e189', from: 'S06', to: 'A05', label: '품질 인사이트',       hours: 104, transfer_type: '수동전달' },
+  { id: 'e190', from: 'A05', to: 'C01', label: '◆ 차기 트렌드 인풋',  hours: 208, transfer_type: '수동전달' },
+  { id: 'e191', from: 'A05', to: 'C04', label: '◆ 경쟁 재정의',       hours: 104, transfer_type: '수동전달' },
+  { id: 'e192', from: 'A05', to: 'C06', label: '◆ 카테고리 재정의',   hours: 78,  transfer_type: '수동전달' },
+  { id: 'e193', from: 'A04', to: 'P01', label: '◆ 차기 POD 시드',     hours: 78,  transfer_type: '구두보고' },
+  { id: 'e194', from: 'A01', to: 'C03', label: '데이터 재활용',       hours: 52,  transfer_type: '자동전달' },
+  { id: 'e195', from: 'S06', to: 'C02', label: '◆ VOC 라이프사이클',  hours: 78,  transfer_type: '구두보고' },
+  { id: 'e196', from: 'A07', to: 'P08', label: '수익성 → 가격포지셔닝', hours: 52,  transfer_type: '수동전달' },
+
+  // ── 10: 백오피스 (Cross-Cutting) ──
+  { id: 'e200', from: 'B01', to: 'B02', label: '신규배치 → OJT',      hours: 52,  transfer_type: '자동전달' },
+  { id: 'e201', from: 'B02', to: 'M09', label: 'OJT → 라인 교육',     hours: 52,  transfer_type: '수동전달' },
+  { id: 'e202', from: 'B03', to: 'M03', label: '계약 심사 → 발주',    hours: 78,  transfer_type: '수동전달' },
+  { id: 'e203', from: 'B03', to: 'M07', label: '계약 → 협력사',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e204', from: 'D04', to: 'B04', label: '신기술 → IP 출원',    hours: 78,  transfer_type: '수동전달' },
+  { id: 'e205', from: 'D05', to: 'B04', label: 'SW IP 출원',          hours: 52,  transfer_type: '수동전달' },
+  { id: 'e206', from: 'M01', to: 'B05', label: 'BOM → 원가',          hours: 104, transfer_type: '수동전달' },
+  { id: 'e207', from: 'B05', to: 'A07', label: '원가 → 수익성',       hours: 78,  transfer_type: '수동전달' },
+  { id: 'e208', from: 'B05', to: 'P08', label: '원가 → 가격 검토',    hours: 78,  transfer_type: '수동전달' },
+  { id: 'e209', from: 'A02', to: 'B06', label: '손익 → 결산',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e210', from: 'B07', to: 'M02', label: 'ERP 정합 → MRP',      hours: 52,  transfer_type: '자동전달' },
+  { id: 'e211', from: 'B07', to: 'A01', label: 'ERP → 데이터분석',    hours: 39,  transfer_type: '자동전달' },
+  { id: 'e212', from: 'B08', to: 'A01', label: '거버넌스 → BI',       hours: 52,  transfer_type: '자동전달' },
+  { id: 'e213', from: 'B06', to: 'A04', label: '결산 → 임원보고',     hours: 52,  transfer_type: '수동전달' },
+
+  // ── 신규: 인사이트 세부 연결 ──
+  { id: 'e220', from: 'C10', to: 'C04', label: '라이프스타일 → 경쟁', hours: 39,  transfer_type: '자동전달' },
+  { id: 'e221', from: 'C11', to: 'C07', label: '여정 → 에스노',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e222', from: 'C12', to: 'P01', label: '컨퍼런스 → POD',      hours: 52,  transfer_type: '수동전달' },
+  { id: 'e223', from: 'C13', to: 'C08', label: '인터뷰 → 페르소나',   hours: 78,  transfer_type: '수동전달' },
+  { id: 'e224', from: 'C14', to: 'C04', label: '리포트 → 경쟁BM',    hours: 39,  transfer_type: '자동전달' },
+  { id: 'e225', from: 'C13', to: 'C11', label: '인터뷰 → 여정',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e226', from: 'C10', to: 'L08', label: '트렌드 → 광고소재',   hours: 39,  transfer_type: '자동전달' },
+
+  // ── 신규: POD 세부 연결 ──
+  { id: 'e230', from: 'P09', to: 'P02', label: '키비주얼 → FGI',      hours: 52,  transfer_type: '수동전달' },
+  { id: 'e231', from: 'P09', to: 'P07', label: '키비주얼 → 시안',     hours: 39,  transfer_type: '자동전달' },
+  { id: 'e232', from: 'P10', to: 'P04', label: 'ROI → 사업성',        hours: 52,  transfer_type: '수동전달' },
+  { id: 'e233', from: 'P11', to: 'P05', label: '타임라인 → 승인',     hours: 39,  transfer_type: '수동전달' },
+  { id: 'e234', from: 'P12', to: 'P05', label: '리스크 → 승인',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e235', from: 'P13', to: 'L04', label: '메시지 초안 → 캠페인', hours: 78,  transfer_type: '수동전달' },
+  { id: 'e236', from: 'P05', to: 'P11', label: '승인 → 타임라인',     hours: 39,  transfer_type: '자동전달' },
+  { id: 'e237', from: 'P03', to: 'P10', label: 'RFP → ROI',           hours: 52,  transfer_type: '수동전달' },
+  { id: 'e238', from: 'P03', to: 'P12', label: 'RFP → 리스크',        hours: 39,  transfer_type: '수동전달' },
+
+  // ── 신규: 개발 세부 연결 ──
+  { id: 'e240', from: 'D09', to: 'D15', label: '회로 → 시뮬',         hours: 52,  transfer_type: '자동전달' },
+  { id: 'e241', from: 'D15', to: 'D16', label: '시뮬 → PCB',          hours: 78,  transfer_type: '수동전달' },
+  { id: 'e242', from: 'D16', to: 'D07', label: 'PCB → 시제품',        hours: 78,  transfer_type: '수동전달' },
+  { id: 'e243', from: 'D10', to: 'D17', label: '기구 → 금형',         hours: 104, transfer_type: '수동전달' },
+  { id: 'e244', from: 'D17', to: 'M08', label: '금형 설계 → 발주',    hours: 78,  transfer_type: '수동전달' },
+  { id: 'e245', from: 'D02', to: 'D18', label: '일정 → SW 아키',      hours: 39,  transfer_type: '자동전달' },
+  { id: 'e246', from: 'D18', to: 'D05', label: '아키 → SW 개발',      hours: 78,  transfer_type: '수동전달' },
+  { id: 'e247', from: 'D05', to: 'D19', label: 'SW → 단위테스트',     hours: 52,  transfer_type: '자동전달' },
+  { id: 'e248', from: 'D19', to: 'D20', label: '단위 → 통합테스트',   hours: 78,  transfer_type: '자동전달' },
+  { id: 'e249', from: 'D20', to: 'D07', label: '통합 → 시제품',       hours: 52,  transfer_type: '자동전달' },
+  { id: 'e250', from: 'D11', to: 'D21', label: 'IoT → AI/ML',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e251', from: 'D21', to: 'D05', label: 'AI 모델 → SW 통합',   hours: 104, transfer_type: '수동전달' },
+  { id: 'e252', from: 'D07', to: 'D22', label: '시제 → 안전성',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e253', from: 'D22', to: 'D08', label: '안전 → DR',           hours: 39,  transfer_type: '자동전달' },
+  { id: 'e254', from: 'D03', to: 'D23', label: 'UX → 매뉴얼',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e255', from: 'D23', to: 'L08', label: '매뉴얼 → 광고소재',   hours: 39,  transfer_type: '자동전달' },
+  { id: 'e256', from: 'D04', to: 'D24', label: '신기술 → IP 검토',    hours: 78,  transfer_type: '수동전달' },
+  { id: 'e257', from: 'D24', to: 'B04', label: 'IP 검토 → 출원',      hours: 52,  transfer_type: '수동전달' },
+
+  // ── 신규: 시험 세부 연결 ──
+  { id: 'e260', from: 'D07', to: 'T09', label: '시제 → 기능검증',     hours: 78,  transfer_type: '수동전달' },
+  { id: 'e261', from: 'T09', to: 'T05', label: '기능 결과',           hours: 52,  transfer_type: '수동전달' },
+  { id: 'e262', from: 'T03', to: 'T10', label: '글로벌 → ESD',        hours: 39,  transfer_type: '자동전달' },
+  { id: 'e263', from: 'T10', to: 'T05', label: 'ESD 결과',            hours: 39,  transfer_type: '수동전달' },
+  { id: 'e264', from: 'D14', to: 'T11', label: 'DFM → 분해실험',      hours: 52,  transfer_type: '수동전달' },
+  { id: 'e265', from: 'T11', to: 'T05', label: '분해 결과',            hours: 39,  transfer_type: '수동전달' },
+  { id: 'e266', from: 'D07', to: 'T12', label: '시제 → 베타',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e267', from: 'T12', to: 'C13', label: '베타 → 인터뷰',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e268', from: 'T12', to: 'T05', label: '베타 결과',            hours: 78,  transfer_type: '수동전달' },
+
+  // ── 신규: 양산 준비 세부 연결 ──
+  { id: 'e270', from: 'M05', to: 'M10', label: '표준서 → SOP',        hours: 39,  transfer_type: '자동전달' },
+  { id: 'e271', from: 'M04', to: 'M11', label: '라인 → 지그',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e272', from: 'M11', to: 'M06', label: '지그 → PP',           hours: 52,  transfer_type: '수동전달' },
+  { id: 'e273', from: 'M04', to: 'M12', label: '라인 → 검사장비',     hours: 78,  transfer_type: '수동전달' },
+  { id: 'e274', from: 'M12', to: 'F04', label: '검사 자동화 → OQC',   hours: 52,  transfer_type: '자동전달' },
+  { id: 'e275', from: 'M04', to: 'M13', label: '라인 → 시뮬',         hours: 39,  transfer_type: '자동전달' },
+  { id: 'e276', from: 'M13', to: 'M06', label: '시뮬 → PP',           hours: 39,  transfer_type: '자동전달' },
+  { id: 'e277', from: 'D03', to: 'M14', label: '디자인 → 패키징',     hours: 78,  transfer_type: '수동전달' },
+  { id: 'e278', from: 'M14', to: 'F05', label: '패키지 → 출하',       hours: 52,  transfer_type: '수동전달' },
+
+  // ── 신규: 본 양산 세부 연결 ──
+  { id: 'e280', from: 'F02', to: 'F09', label: '주간 → 야간 인계',    hours: 52,  transfer_type: '수동전달' },
+  { id: 'e281', from: 'F09', to: 'F08', label: '야간 → 일보',         hours: 39,  transfer_type: '수동전달' },
+  { id: 'e282', from: 'F03', to: 'F10', label: '품질 데이터 → 회의',  hours: 39,  transfer_type: '수동전달' },
+  { id: 'e283', from: 'F10', to: 'S04', label: '품질회의 → 8D',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e284', from: 'F02', to: 'F11', label: '라인 정지 발생',      hours: 78,  transfer_type: '자동전달' },
+  { id: 'e285', from: 'F11', to: 'F02', label: '리커버리 완료',       hours: 52,  transfer_type: '자동전달' },
+  { id: 'e286', from: 'F02', to: 'F12', label: '안전 알람',           hours: 39,  transfer_type: '자동전달' },
+  { id: 'e287', from: 'F12', to: 'F11', label: '안전 → 정지',         hours: 39,  transfer_type: '구두보고' },
+  { id: 'e288', from: 'F01', to: 'F13', label: '입고 → 회전 분석',    hours: 39,  transfer_type: '자동전달' },
+  { id: 'e289', from: 'F13', to: 'L07', label: '회전 → PSI',          hours: 52,  transfer_type: '수동전달' },
+
+  // ── 신규: 영업/물류 세부 연결 ──
+  { id: 'e300', from: 'L05', to: 'L11', label: '판매 → 매장 진열',    hours: 78,  transfer_type: '수동전달' },
+  { id: 'e301', from: 'L11', to: 'L05', label: '진열 보고',           hours: 52,  transfer_type: '수동전달' },
+  { id: 'e302', from: 'L12', to: 'L05', label: '교육 → 영업',         hours: 39,  transfer_type: '자동전달' },
+  { id: 'e303', from: 'L01', to: 'L13', label: '수출 통관',           hours: 78,  transfer_type: '수동전달' },
+  { id: 'e304', from: 'L13', to: 'L02', label: '통관 후 배송',        hours: 52,  transfer_type: '자동전달' },
+  { id: 'e305', from: 'L04', to: 'L14', label: '캠페인 → PRESS',      hours: 78,  transfer_type: '수동전달' },
+  { id: 'e306', from: 'L14', to: 'L05', label: 'PRESS → 매장',        hours: 52,  transfer_type: '자동전달' },
+  { id: 'e307', from: 'L14', to: 'L06', label: 'PRESS → 온라인',      hours: 52,  transfer_type: '자동전달' },
+  { id: 'e308', from: 'L02', to: 'L15', label: '배송 → B2B',          hours: 52,  transfer_type: '자동전달' },
+  { id: 'e309', from: 'L15', to: 'A01', label: 'B2B 실적',            hours: 78,  transfer_type: '수동전달' },
+  { id: 'e310', from: 'L02', to: 'L16', label: '배송 → 채널 재고',    hours: 39,  transfer_type: '자동전달' },
+  { id: 'e311', from: 'L16', to: 'L07', label: '재고 → PSI',          hours: 78,  transfer_type: '수동전달' },
+  { id: 'e312', from: 'L16', to: 'A11', label: '재고 → 일수 분석',    hours: 52,  transfer_type: '자동전달' },
+
+  // ── 신규: 서비스 세부 연결 ──
+  { id: 'e320', from: 'S01', to: 'S10', label: 'VOC → 챗봇',          hours: 39,  transfer_type: '자동전달' },
+  { id: 'e321', from: 'S10', to: 'S07', label: '챗봇 → 콜분석',       hours: 39,  transfer_type: '자동전달' },
+  { id: 'e322', from: 'S02', to: 'S11', label: 'AS → 보증정책',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e323', from: 'S11', to: 'S09', label: '보증 → 부품',         hours: 52,  transfer_type: '수동전달' },
+  { id: 'e324', from: 'S02', to: 'S14', label: 'AS 의뢰 → 스케줄',    hours: 78,  transfer_type: '자동전달' },
+  { id: 'e325', from: 'S14', to: 'S08', label: '스케줄 → 출장',       hours: 52,  transfer_type: '자동전달' },
+  { id: 'e326', from: 'S02', to: 'S12', label: 'AS → 만족도',         hours: 39,  transfer_type: '자동전달' },
+  { id: 'e327', from: 'S12', to: 'S11', label: '만족도 → 정책',       hours: 52,  transfer_type: '수동전달' },
+  { id: 'e328', from: 'S09', to: 'S13', label: 'RMA → 부품 예측',     hours: 52,  transfer_type: '자동전달' },
+  { id: 'e329', from: 'S13', to: 'F13', label: '부품 예측 → 회전',    hours: 39,  transfer_type: '자동전달' },
+  { id: 'e330', from: 'S12', to: 'C02', label: '◆ 만족도 → VOC',      hours: 52,  transfer_type: '자동전달' },
+
+  // ── 신규: 분석 세부 연결 ──
+  { id: 'e340', from: 'A01', to: 'A09', label: '실적 → 일일 마감',    hours: 52,  transfer_type: '자동전달' },
+  { id: 'e341', from: 'A09', to: 'A06', label: '마감 → KPI',          hours: 39,  transfer_type: '자동전달' },
+  { id: 'e342', from: 'A06', to: 'A10', label: 'KPI → 동향보고',      hours: 52,  transfer_type: '수동전달' },
+  { id: 'e343', from: 'A10', to: 'A04', label: '동향 → 임원',         hours: 39,  transfer_type: '수동전달' },
+  { id: 'e344', from: 'A07', to: 'A12', label: '수익성 → 마진 압박',  hours: 52,  transfer_type: '자동전달' },
+  { id: 'e345', from: 'A12', to: 'P08', label: '마진 → 가격 포지셔닝', hours: 78,  transfer_type: '수동전달' },
+  { id: 'e346', from: 'A03', to: 'A13', label: '검토 → 포스트모템',   hours: 78,  transfer_type: '수동전달' },
+  { id: 'e347', from: 'A13', to: 'A05', label: '포스트모템 → 인사이트', hours: 52,  transfer_type: '구두보고' },
+  { id: 'e348', from: 'A11', to: 'L07', label: '재고일 → PSI',        hours: 39,  transfer_type: '자동전달' },
+
+  // ── 신규: 백오피스 세부 연결 ──
+  { id: 'e360', from: 'B09', to: 'B01', label: '채용 → 발령',         hours: 78,  transfer_type: '수동전달' },
+  { id: 'e361', from: 'B10', to: 'B12', label: '노사 → 리더십',       hours: 39,  transfer_type: '구두보고' },
+  { id: 'e362', from: 'B11', to: 'B08', label: '보안교육 → 거버넌스', hours: 39,  transfer_type: '자동전달' },
+  { id: 'e363', from: 'B12', to: 'B02', label: '코칭 → OJT',          hours: 39,  transfer_type: '구두보고' },
+  { id: 'e364', from: 'B13', to: 'B03', label: '컴플 → 계약 심사',    hours: 52,  transfer_type: '수동전달' },
+  { id: 'e365', from: 'B14', to: 'F12', label: '시설 → 안전점검',     hours: 52,  transfer_type: '자동전달' },
+  { id: 'e366', from: 'B09', to: 'B02', label: '신입 → OJT',          hours: 52,  transfer_type: '자동전달' },
+  { id: 'e367', from: 'B13', to: 'A08', label: '컴플 → ESG',          hours: 52,  transfer_type: '수동전달' },
+
+  // ── 신규: 사이클 보강 (다중 피드백) ──
+  { id: 'e380', from: 'A13', to: 'C13', label: '◆ 사후평가 → 인터뷰', hours: 52,  transfer_type: '수동전달' },
+  { id: 'e381', from: 'S12', to: 'P02', label: '◆ 만족도 → FGI',      hours: 39,  transfer_type: '수동전달' },
+  { id: 'e382', from: 'A11', to: 'M02', label: '◆ 재고일 → MRP',      hours: 52,  transfer_type: '수동전달' },
+  { id: 'e383', from: 'F11', to: 'D14', label: '◆ 정지원인 → DFM',    hours: 78,  transfer_type: '수동전달' },
+  { id: 'e384', from: 'L09', to: 'C05', label: '인플 결과 → 소셜',    hours: 39,  transfer_type: '자동전달' }
+];
+
+//====================== STATE ======================
+const state = {
+  nodes: null, // initialized in boot() once vis-network is loaded
+  edges: null,
+  removedHistory: [], // [{node, edges}]
+  selectedNodeIds: new Set(),
+  filters: {
+    depts: new Set(),
+    jobs: new Set(),
+    edgeTypes: new Set(['수동전달', '자동전달', '구두보고']),
+    axOnly: false
+  },
+  network: null,
+  hiddenNodeIds: new Set(),
+  hiddenEdgeIds: new Set()
+};
+
+//====================== INIT NETWORK ======================
+function nodeToVis(n) {
+  return {
+    id: n.id,
+    label: n.label,
+    color: {
+      background: JOB_COLORS[n.job_type] || '#6B7280',
+      border: n.ax_candidate ? '#FFD600' : JOB_COLORS[n.job_type],
+      highlight: { background: JOB_COLORS[n.job_type], border: '#FF1744' }
+    },
+    borderWidth: n.ax_candidate ? 3 : 1,
+    borderWidthSelected: 4,
+    font: { color: '#fff', size: 12, face: 'Nanum Gothic', bold: { color: '#fff', size: 12 } },
+    shape: 'box',
+    margin: 10,
+    shadow: { enabled: true, color: 'rgba(0,0,0,0.15)', size: 6, x: 1, y: 2 },
+    title: buildTooltip(n),
+    _data: n
+  };
+}
+
+function edgeToVis(e) {
+  // ★ Edge length proportional to bottleneck (hours).
+  // Higher hours → longer spring → spatially distant connection in the graph.
+  const length = 80 + e.hours * 2.2;
+  // Width also scales with hours (visual emphasis on pain points)
+  const baseWidth = e.transfer_type === '수동전달' ? 1.5 : 1.0;
+  const width = baseWidth + Math.min(4.5, e.hours / 28);
+  // Pain edges (manual + high hours) get a deeper red
+  let color = EDGE_COLORS[e.transfer_type];
+  if (e.transfer_type === '수동전달' && e.hours >= 100) color = '#E53935';
+  else if (e.transfer_type === '수동전달' && e.hours >= 60) color = '#EF5350';
+  return {
+    id: e.id,
+    from: e.from,
+    to: e.to,
+    label: `${e.label} · ${e.hours}h`,
+    arrows: { to: { enabled: true, scaleFactor: 0.7 } },
+    color: { color: color, highlight: '#1428A0' },
+    width: width,
+    length: length,
+    dashes: e.transfer_type === '구두보고',
+    font: { size: 9, color: '#444', face: 'Nanum Gothic', strokeWidth: 3, strokeColor: '#fff', align: 'middle' },
+    smooth: { type: 'continuous', roundness: 0.2 },
+    _data: e
+  };
+}
+
+function buildTooltip(n) {
+  const div = document.createElement('div');
+  div.style.cssText = 'font-family: Nanum Gothic; font-size: 12px; padding: 4px; max-width: 240px;';
+  div.innerHTML = `
+    <div style="font-weight:700; color:#1428A0; margin-bottom:4px;">${n.label.replace(/\n/g, ' ')}</div>
+    <div><b>부서:</b> ${n.dept}</div>
+    <div><b>담당자:</b> ${n.persona} (${n.job_type})</div>
+    <div><b>연간 시간:</b> ${n.hours_per_year.toLocaleString()} h</div>
+    <div><b>연간 비용:</b> ${n.cost_per_year.toLocaleString()} 원</div>
+    <div><b>시스템:</b> ${n.system}</div>
+    ${n.ax_candidate ? '<div style="margin-top:4px; color:#E65100; font-weight:700;">★ AX 자동화 후보</div>' : ''}
+  `;
+  return div;
+}
+
+function loadInitialData() {
+  state.nodes.clear();
+  state.edges.clear();
+  state.nodes.add(initialNodes.map(nodeToVis));
+  state.edges.add(initialEdges.map(edgeToVis));
+}
+
+function initNetwork() {
+  const container = document.getElementById('graph');
+  const options = {
+    autoResize: true,
+    nodes: {
+      shape: 'box',
+      size: 24,
+      widthConstraint: { minimum: 90, maximum: 130 }
+    },
+    edges: {
+      smooth: { type: 'continuous' }
+    },
+    physics: {
+      enabled: true,
+      solver: 'barnesHut',
+      barnesHut: {
+        gravitationalConstant: -18000,
+        centralGravity: 0.1,
+        springLength: 130,
+        springConstant: 0.015,
+        damping: 0.55,
+        avoidOverlap: 0.5
+      },
+      stabilization: { iterations: 1000, updateInterval: 30, fit: true },
+      minVelocity: 0.6,
+      maxVelocity: 35
+    },
+    interaction: {
+      hover: true,
+      multiselect: true,
+      navigationButtons: false,
+      tooltipDelay: 200
+    },
+    layout: { improvedLayout: true }
+  };
+  state.network = new vis.Network(container, { nodes: state.nodes, edges: state.edges }, options);
+
+  state.network.on('click', onNetworkClick);
+  state.network.on('oncontext', onNetworkRightClick);
+  state.network.on('selectNode', onSelectionChange);
+  state.network.on('deselectNode', onSelectionChange);
+}
+
+//====================== INTERACTIONS ======================
+function onNetworkClick(params) {
+  hideContextMenu();
+  // Selection is managed by vis-network's multiselect (Shift)
+  state.selectedNodeIds = new Set(params.nodes);
+  updateSelectionUI();
+}
+
+function onSelectionChange(params) {
+  state.selectedNodeIds = new Set(params.nodes);
+  updateSelectionUI();
+}
+
+function updateSelectionUI() {
+  const count = state.selectedNodeIds.size;
+  const badge = document.getElementById('selectionBadge');
+  document.getElementById('selectionCount').textContent = count;
+  if (count > 0) badge.classList.add('show'); else badge.classList.remove('show');
+  document.getElementById('bulkRemoveBtn').disabled = count === 0;
+  document.getElementById('addEdgeBtn').disabled = state.nodes.length < 2;
+}
+
+function onNetworkRightClick(params) {
+  params.event.preventDefault();
+  const nodeId = state.network.getNodeAt(params.pointer.DOM);
+  if (!nodeId) { hideContextMenu(); return; }
+  showContextMenu(params.pointer.DOM.x, params.pointer.DOM.y, nodeId);
+}
+
+function showContextMenu(x, y, nodeId) {
+  const menu = document.getElementById('ctxMenu');
+  const wrapRect = document.querySelector('.graph-wrap').getBoundingClientRect();
+  menu.style.left = (wrapRect.left + x) + 'px';
+  menu.style.top  = (wrapRect.top  + y) + 'px';
+  menu.style.display = 'block';
+  menu.dataset.nodeId = nodeId;
+}
+function hideContextMenu() { document.getElementById('ctxMenu').style.display = 'none'; }
+
+document.getElementById('ctxMenu').addEventListener('click', e => {
+  const action = e.target.dataset.action;
+  const nodeId = document.getElementById('ctxMenu').dataset.nodeId;
+  if (!action || !nodeId) return;
+  hideContextMenu();
+  if (action === 'remove') removeNode(nodeId);
+  else if (action === 'edit') openNodeModal(nodeId);
+  else if (action === 'select-connected') {
+    const connected = state.network.getConnectedNodes(nodeId);
+    const all = [nodeId, ...connected];
+    state.network.selectNodes(all);
+    state.selectedNodeIds = new Set(all);
+    updateSelectionUI();
+  } else if (action === 'info') {
+    const n = state.nodes.get(nodeId);
+    if (n) showToast(`${n._data.label.replace(/\n/g,' ')} · ${n._data.hours_per_year}h / ${(n._data.cost_per_year/10000).toFixed(0)}만원`);
+  }
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('#ctxMenu')) hideContextMenu();
+});
+
+//====================== NODE REMOVAL ======================
+function removeNode(nodeId, skipAnimation = false) {
+  const visNode = state.nodes.get(nodeId);
+  if (!visNode) return;
+  const nodeData = visNode._data;
+
+  // Find connected edges
+  const connectedEdgeIds = state.network.getConnectedEdges(nodeId);
+  const connectedEdges = connectedEdgeIds.map(eid => state.edges.get(eid)).filter(Boolean);
+
+  // Stash for undo
+  state.removedHistory.push({
+    node: visNode,
+    edges: connectedEdges
+  });
+
+  if (skipAnimation) {
+    state.edges.remove(connectedEdgeIds);
+    state.nodes.remove(nodeId);
+    afterRemoval();
+  } else {
+    animateRemoval(nodeId, connectedEdgeIds, () => {
+      state.edges.remove(connectedEdgeIds);
+      state.nodes.remove(nodeId);
+      afterRemoval();
+    });
+  }
+}
+
+function animateRemoval(nodeId, edgeIds, done) {
+  const duration = 400;
+  const start = performance.now();
+  function frame(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const ease = 1 - Math.pow(1 - t, 3);
+    const scale = 1 - ease;
+    const opacity = 1 - ease;
+
+    // Shrink node label by simulating size change
+    try {
+      state.nodes.update({
+        id: nodeId,
+        scaling: { min: 1, max: Math.max(0.01, scale * 30) },
+        opacity: opacity,
+        font: { color: `rgba(255,255,255,${opacity})` }
+      });
+    } catch (e) {}
+
+    edgeIds.forEach(eid => {
+      const e = state.edges.get(eid);
+      if (!e) return;
+      try {
+        state.edges.update({
+          id: eid,
+          color: { color: hexToRgba(EDGE_COLORS[e._data.transfer_type], opacity), opacity: opacity },
+          width: Math.max(0.1, (e._data.transfer_type === '수동전달' ? 2.5 : 1.5) * scale)
+        });
+      } catch (err) {}
+    });
+
+    if (t < 1) requestAnimationFrame(frame);
+    else done();
+  }
+  requestAnimationFrame(frame);
+}
+
+function hexToRgba(hex, alpha) {
+  const h = hex.replace('#','');
+  const r = parseInt(h.substring(0,2),16);
+  const g = parseInt(h.substring(2,4),16);
+  const b = parseInt(h.substring(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function afterRemoval() {
+  state.network.stabilize(60);
+  recomputeSavings();
+  renderRemovedList();
+  updateStatsBanner();
+  state.selectedNodeIds.clear();
+  updateSelectionUI();
+}
+
+function bulkRemove() {
+  const ids = [...state.selectedNodeIds];
+  if (ids.length === 0) return;
+  if (!confirm(`${ids.length}개 노드를 일괄 제거하시겠습니까?`)) return;
+  ids.forEach(id => removeNode(id, true));
+  showToast(`${ids.length}개 노드 제거됨`);
+}
+
+//====================== UNDO / RESET ======================
+function undoRemove(index) {
+  const idx = (typeof index === 'number') ? index : state.removedHistory.length - 1;
+  if (idx < 0 || idx >= state.removedHistory.length) return;
+  const entry = state.removedHistory.splice(idx, 1)[0];
+  if (!entry) return;
+
+  // Restore node (reset scale/opacity)
+  const restoredNode = nodeToVis(entry.node._data);
+  state.nodes.add(restoredNode);
+
+  // Restore edges that still have both endpoints
+  entry.edges.forEach(e => {
+    if (!e || !e._data) return;
+    if (state.nodes.get(e._data.from) && state.nodes.get(e._data.to)) {
+      try { state.edges.add(edgeToVis(e._data)); } catch(_) {}
+    }
+  });
+
+  recomputeSavings();
+  renderRemovedList();
+  updateStatsBanner();
+  applyFilters();
+}
+
+function undoAll() {
+  while (state.removedHistory.length) undoRemove(state.removedHistory.length - 1);
+  showToast('전체 복원 완료');
+}
+
+function resetSimulation() {
+  if (!confirm('시뮬레이션을 초기화합니다. 모든 제거 이력이 사라집니다.')) return;
+  state.removedHistory = [];
+  state.selectedNodeIds.clear();
+  loadInitialData();
+  applyFilters();
+  recomputeSavings();
+  renderRemovedList();
+  updateStatsBanner();
+  updateSelectionUI();
+  showToast('초기화 완료');
+}
+
+//====================== SAVINGS / COUNTERS ======================
+function recomputeSavings() {
+  let hours = 0;
+  state.removedHistory.forEach(entry => {
+    hours += entry.node._data.hours_per_year;
+    entry.edges.forEach(e => { if (e && e._data) hours += e._data.hours; });
+  });
+  const cost = hours * HOURLY_RATE;
+  const fte = hours / FTE_HOURS;
+
+  animateNumber(document.getElementById('savedHours'), hours, v => Math.round(v).toLocaleString() + ' h');
+  animateNumber(document.getElementById('savedCost'),  cost,  v => Math.round(v).toLocaleString() + ' 원');
+  animateNumber(document.getElementById('savedFTE'),   fte,   v => v.toFixed(2) + ' 명');
+}
+
+function animateNumber(el, target, formatter) {
+  const current = parseFloat(el.dataset.val || '0');
+  const start = performance.now();
+  const duration = 500;
+  function step(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const ease = 1 - Math.pow(1 - t, 3);
+    const v = current + (target - current) * ease;
+    el.textContent = formatter(v);
+    if (t < 1) requestAnimationFrame(step);
+    else el.dataset.val = String(target);
+  }
+  requestAnimationFrame(step);
+}
+
+function renderRemovedList() {
+  const list = document.getElementById('removedList');
+  list.innerHTML = '';
+  state.removedHistory.forEach((entry, idx) => {
+    const div = document.createElement('div');
+    div.className = 'removed-item';
+    const n = entry.node._data;
+    const edgeHours = entry.edges.reduce((a,e) => a + (e && e._data ? e._data.hours : 0), 0);
+    div.innerHTML = `
+      <span class="color-dot" style="background:${JOB_COLORS[n.job_type]}"></span>
+      <span class="name" title="${n.label.replace(/\n/g,' ')}">${n.label.replace(/\n/g,' ')}</span>
+      <span style="font-size:10px; color:#6B7280; margin: 0 6px;">${(n.hours_per_year + edgeHours)}h</span>
+      <button class="undo-btn" data-idx="${idx}">복원</button>
+    `;
+    list.appendChild(div);
+  });
+  list.querySelectorAll('.undo-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      undoRemove(parseInt(btn.dataset.idx, 10));
+    });
+  });
+}
+
+//====================== FILTERS ======================
+function buildFilters() {
+  // Comprehensive dept list = catalog + any extra depts that exist in initial nodes
+  const usedDepts = new Set(initialNodes.map(n => n.dept));
+  const allDepts = new Set([...ALL_DEPTS, ...usedDepts]);
+  const jobs = Object.keys(DEPT_CATALOG);
+  const edgeTypes = ['수동전달', '자동전달', '구두보고'];
+
+  // Initial filter state — only used depts checked, others unchecked (to avoid clutter)
+  state.filters.depts = new Set([...usedDepts]);
+  state.filters.jobs  = new Set(jobs);
+
+  // ----- Dept filter: grouped by job_type, collapsible -----
+  const deptDiv = document.getElementById('deptFilter');
+  deptDiv.innerHTML = '';
+
+  // Toolbar: 전체선택 / 사용중만 / 해제
+  const toolbar = document.createElement('div');
+  toolbar.className = 'dept-toolbar';
+  toolbar.innerHTML = `
+    <button data-act="all">전체</button>
+    <button data-act="used">사용중</button>
+    <button data-act="none">해제</button>
+  `;
+  deptDiv.appendChild(toolbar);
+  toolbar.addEventListener('click', e => {
+    const act = e.target.dataset.act;
+    if (!act) return;
+    const cbs = deptDiv.querySelectorAll('input[data-dept]');
+    cbs.forEach(cb => {
+      if (act === 'all') cb.checked = true;
+      else if (act === 'none') cb.checked = false;
+      else if (act === 'used') cb.checked = usedDepts.has(cb.dataset.dept);
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+
+  jobs.forEach(job => {
+    const groupDepts = (DEPT_CATALOG[job] || []).slice();
+    // Append any "extra" depts under their inferred job (or this group if matched)
+    [...allDepts].forEach(d => {
+      if (!ALL_DEPTS.includes(d)) {
+        // Find a node using d to learn its job
+        const sample = initialNodes.find(n => n.dept === d);
+        if (sample && sample.job_type === job && !groupDepts.includes(d)) groupDepts.push(d);
+      }
+    });
+    if (groupDepts.length === 0) return;
+
+    const group = document.createElement('div');
+    group.className = 'dept-group';
+    const header = document.createElement('div');
+    header.className = 'dept-group-header';
+    header.innerHTML = `
+      <span class="caret">▾</span>
+      <span class="color-dot" style="background:${JOB_COLORS[job]}"></span>
+      <span class="dept-group-name">${job}</span>
+      <span class="dept-group-count">${groupDepts.length}</span>
+    `;
+    const body = document.createElement('div');
+    body.className = 'dept-group-body';
+
+    groupDepts.forEach(d => {
+      const lbl = document.createElement('label');
+      const checked = usedDepts.has(d) ? 'checked' : '';
+      const inUse = usedDepts.has(d);
+      lbl.innerHTML = `<input type="checkbox" ${checked} data-dept="${d}"><span style="${inUse ? 'font-weight:700;' : 'color:#9CA3AF;'}">${d}</span>`;
+      body.appendChild(lbl);
+    });
+
+    header.addEventListener('click', () => {
+      group.classList.toggle('collapsed');
+    });
+    group.appendChild(header);
+    group.appendChild(body);
+    deptDiv.appendChild(group);
+  });
+
+  // ----- Job filter -----
+  const jobDiv = document.getElementById('jobFilter');
+  jobDiv.innerHTML = '';
+  jobs.forEach(j => {
+    const lbl = document.createElement('label');
+    lbl.innerHTML = `<input type="checkbox" checked data-job="${j}"><span class="color-dot" style="background:${JOB_COLORS[j]}"></span><span>${j}</span>`;
+    jobDiv.appendChild(lbl);
+  });
+
+  // ----- Edge filter -----
+  const edgeDiv = document.getElementById('edgeFilter');
+  edgeDiv.innerHTML = '';
+  edgeTypes.forEach(e => {
+    const lbl = document.createElement('label');
+    lbl.innerHTML = `<input type="checkbox" checked data-edge="${e}"><span class="color-dot" style="background:${EDGE_COLORS[e]}"></span><span>${e}</span>`;
+    edgeDiv.appendChild(lbl);
+  });
+
+  // ----- Wire change events (delegated) -----
+  deptDiv.addEventListener('change', e => {
+    if (!e.target.dataset.dept) return;
+    if (e.target.checked) state.filters.depts.add(e.target.dataset.dept);
+    else state.filters.depts.delete(e.target.dataset.dept);
+    applyFilters();
+  });
+  jobDiv.addEventListener('change', e => {
+    if (!e.target.dataset.job) return;
+    if (e.target.checked) state.filters.jobs.add(e.target.dataset.job);
+    else state.filters.jobs.delete(e.target.dataset.job);
+    applyFilters();
+  });
+  edgeDiv.addEventListener('change', e => {
+    if (!e.target.dataset.edge) return;
+    if (e.target.checked) state.filters.edgeTypes.add(e.target.dataset.edge);
+    else state.filters.edgeTypes.delete(e.target.dataset.edge);
+    applyFilters();
+  });
+  document.getElementById('axOnly').addEventListener('change', e => {
+    state.filters.axOnly = e.target.checked;
+    applyFilters();
+  });
+}
+
+function applyFilters() {
+  // Determine which nodes should be hidden
+  const updates = [];
+  state.nodes.forEach(visNode => {
+    const n = visNode._data;
+    if (!n) {
+      console.warn('[applyFilters] node missing _data', visNode);
+      updates.push({ id: visNode.id, hidden: false });
+      state.hiddenNodeIds.delete(visNode.id);
+      return;
+    }
+    const hide = !state.filters.depts.has(n.dept)
+              || !state.filters.jobs.has(n.job_type)
+              || (state.filters.axOnly && !n.ax_candidate);
+    updates.push({ id: n.id, hidden: hide });
+    if (hide) state.hiddenNodeIds.add(n.id); else state.hiddenNodeIds.delete(n.id);
+  });
+  state.nodes.update(updates);
+
+  const eUpdates = [];
+  state.edges.forEach(visEdge => {
+    const e = visEdge._data;
+    if (!e) {
+      eUpdates.push({ id: visEdge.id, hidden: false });
+      return;
+    }
+    const hide = !state.filters.edgeTypes.has(e.transfer_type)
+              || state.hiddenNodeIds.has(e.from)
+              || state.hiddenNodeIds.has(e.to);
+    eUpdates.push({ id: e.id, hidden: hide });
+  });
+  state.edges.update(eUpdates);
+
+  updateStatsBanner();
+}
+
+//====================== STATS ======================
+function updateStatsBanner() {
+  const allNodes = state.nodes.length + state.removedHistory.length;
+  let visible = 0, totalHours = 0, totalCost = 0;
+  state.nodes.forEach(visNode => {
+    if (!visNode.hidden) {
+      visible++;
+      totalHours += visNode._data.hours_per_year;
+      totalCost += visNode._data.cost_per_year;
+    }
+  });
+  document.getElementById('totalNodes').textContent   = allNodes;
+  document.getElementById('visibleNodes').textContent = visible;
+  document.getElementById('totalHours').textContent   = totalHours.toLocaleString() + 'h';
+  document.getElementById('totalCost').textContent    = (totalCost / 10000).toLocaleString() + '만원';
+}
+
+//====================== EXPORT ======================
+function exportToClipboard() {
+  if (state.removedHistory.length === 0) {
+    showToast('제거된 노드가 없습니다');
+    return;
+  }
+  let totalHours = 0;
+  const lines = ['[DA사업부 업무 노드 제거 시뮬레이션 결과]', ''];
+  lines.push(`▌제거 노드: ${state.removedHistory.length}개`);
+  lines.push('');
+  lines.push('No.\t업무명\t부서\t직군\t업무시간(h)\t연결시간(h)\t합계(h)\t절감비용(원)');
+  state.removedHistory.forEach((entry, i) => {
+    const n = entry.node._data;
+    const eh = entry.edges.reduce((a, e) => a + (e && e._data ? e._data.hours : 0), 0);
+    const sum = n.hours_per_year + eh;
+    totalHours += sum;
+    lines.push(`${i+1}\t${n.label.replace(/\n/g,' ')}\t${n.dept}\t${n.job_type}\t${n.hours_per_year}\t${eh}\t${sum}\t${(sum*HOURLY_RATE).toLocaleString()}`);
+  });
+  const totalCost = totalHours * HOURLY_RATE;
+  const fte = (totalHours / FTE_HOURS).toFixed(2);
+  lines.push('');
+  lines.push(`▌연간 절감 시간: ${totalHours.toLocaleString()} h`);
+  lines.push(`▌연간 절감 비용: ${totalCost.toLocaleString()} 원 (시간당 ${HOURLY_RATE.toLocaleString()}원 기준)`);
+  lines.push(`▌FTE 절감     : ${fte} 명 (2,080h/년 기준)`);
+
+  const text = lines.join('\n');
+  navigator.clipboard.writeText(text).then(
+    () => showToast('클립보드에 복사되었습니다'),
+    () => {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); showToast('클립보드에 복사되었습니다'); }
+      catch(e) { showToast('복사 실패 - 콘솔에 출력됨'); console.log(text); }
+      document.body.removeChild(ta);
+    }
+  );
+}
+
+//====================== TOAST ======================
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+//====================== ADD/EDIT NODE ======================
+let editingNodeId = null;
+
+function openNodeModal(nodeId) {
+  editingNodeId = nodeId || null;
+  const title = document.getElementById('nodeModalTitle');
+  const f = id => document.getElementById(id);
+
+  // Refresh dept datalist with full catalog + any custom depts
+  const datalist = document.getElementById('deptList');
+  datalist.innerHTML = '';
+  const depts = new Set(ALL_DEPTS);
+  state.nodes.forEach(v => depts.add(v._data.dept));
+  state.removedHistory.forEach(h => depts.add(h.node._data.dept));
+  // Sort: catalog order first (grouped by job), then extras alphabetically
+  const ordered = [];
+  Object.keys(DEPT_CATALOG).forEach(j => {
+    DEPT_CATALOG[j].forEach(d => { if (depts.has(d)) ordered.push(d); });
+  });
+  [...depts].forEach(d => { if (!ordered.includes(d)) ordered.push(d); });
+  ordered.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d;
+    if (DEPT_TO_JOB[d]) opt.label = `[${DEPT_TO_JOB[d]}] ${d}`;
+    datalist.appendChild(opt);
+  });
+
+  if (nodeId) {
+    const n = state.nodes.get(nodeId)._data;
+    title.textContent = '노드 편집';
+    f('f_label').value = n.label.replace(/\n/g, '\\n');
+    f('f_dept').value = n.dept;
+    f('f_persona').value = n.persona;
+    f('f_job').value = n.job_type;
+    f('f_hours').value = n.hours_per_year;
+    f('f_system').value = n.system;
+    f('f_ax').checked = n.ax_candidate;
+  } else {
+    title.textContent = '새 노드 추가';
+    f('f_label').value = '';
+    f('f_dept').value = '';
+    f('f_persona').value = '';
+    f('f_job').value = '구매·SCM';
+    f('f_hours').value = 0;
+    f('f_system').value = '';
+    f('f_ax').checked = false;
+  }
+  updateCostPreview();
+  document.getElementById('nodeModal').classList.add('show');
+  setTimeout(() => f('f_label').focus(), 50);
+}
+
+function closeNodeModal() {
+  document.getElementById('nodeModal').classList.remove('show');
+  editingNodeId = null;
+}
+
+function updateCostPreview() {
+  const h = parseFloat(document.getElementById('f_hours').value) || 0;
+  document.getElementById('costPreview').textContent =
+    '연간 비용: ' + (h * HOURLY_RATE).toLocaleString() + ' 원';
+}
+
+function saveNode() {
+  const f = id => document.getElementById(id);
+  const label = f('f_label').value.trim();
+  const dept = f('f_dept').value.trim();
+  const hours = parseFloat(f('f_hours').value);
+
+  if (!label) { showToast('업무명을 입력하세요'); return; }
+  if (!dept)  { showToast('부서를 입력하세요'); return; }
+  if (isNaN(hours) || hours < 0) { showToast('연간 시간을 올바르게 입력하세요'); return; }
+
+  const data = {
+    label: label.replace(/\\n/g, '\n'),
+    dept: dept,
+    persona: f('f_persona').value.trim() || '미지정',
+    job_type: f('f_job').value,
+    hours_per_year: hours,
+    cost_per_year: hours * HOURLY_RATE,
+    system: f('f_system').value.trim() || '-',
+    ax_candidate: f('f_ax').checked
+  };
+
+  ensureFilterEntry(data.dept, data.job_type);
+
+  try {
+    if (editingNodeId) {
+      const visNode = state.nodes.get(editingNodeId);
+      if (visNode) {
+        const merged = Object.assign({}, visNode._data, data, { id: editingNodeId });
+        const updated = nodeToVis(merged);
+        updated.hidden = false;
+        state.nodes.update(updated);
+      }
+      showToast('노드 수정됨');
+    } else {
+      data.id = generateNodeId(data.job_type);
+      const visObj = nodeToVis(data);
+      visObj.hidden = false;
+      // Pick a safe coordinate: average of existing visible node positions, fallback to (0,0)
+      let cx = 0, cy = 0, count = 0;
+      try {
+        const positions = state.network.getPositions();
+        Object.keys(positions).forEach(id => {
+          const p = positions[id];
+          if (typeof p.x === 'number' && typeof p.y === 'number'
+              && !isNaN(p.x) && !isNaN(p.y)
+              && isFinite(p.x) && isFinite(p.y)) {
+            cx += p.x; cy += p.y; count++;
+          }
+        });
+        if (count > 0) { cx /= count; cy /= count; }
+      } catch(e) {}
+      visObj.x = cx + (Math.random() - 0.5) * 80;
+      visObj.y = cy + (Math.random() - 0.5) * 80;
+      if (isNaN(visObj.x) || !isFinite(visObj.x)) visObj.x = 0;
+      if (isNaN(visObj.y) || !isFinite(visObj.y)) visObj.y = 0;
+      state.nodes.add(visObj);
+      console.log('[Node added]', data.id, data.label, 'pos:', visObj.x, visObj.y, 'total:', state.nodes.length);
+      showToast(`노드 "${label}" 추가됨 (${data.id})`);
+    }
+  } catch (err) {
+    console.error('[saveNode error]', err);
+    showToast('노드 저장 중 오류 — 콘솔 확인');
+    return;
+  }
+
+  closeNodeModal();
+  applyFilters();
+  updateStatsBanner();
+  // Force re-render and recenter
+  setTimeout(() => {
+    try {
+      state.network.redraw();
+      state.network.stabilize(120);
+      state.network.fit({ animation: { duration: 600 } });
+    } catch(e) { console.error('[fit error]', e); }
+  }, 80);
+}
+
+function ensureFilterEntry(dept, job) {
+  // Add new dept checkbox if missing
+  if (!state.filters.depts.has(dept)) {
+    state.filters.depts.add(dept);
+    const deptDiv = document.getElementById('deptFilter');
+    const lbl = document.createElement('label');
+    lbl.innerHTML = `<input type="checkbox" checked data-dept="${dept}"><span>${dept}</span>`;
+    lbl.querySelector('input').addEventListener('change', e => {
+      if (e.target.checked) state.filters.depts.add(e.target.dataset.dept);
+      else state.filters.depts.delete(e.target.dataset.dept);
+      applyFilters();
+    });
+    deptDiv.appendChild(lbl);
+  }
+  // Add new job checkbox if missing
+  if (!state.filters.jobs.has(job)) {
+    state.filters.jobs.add(job);
+    const jobDiv = document.getElementById('jobFilter');
+    const lbl = document.createElement('label');
+    lbl.innerHTML = `<input type="checkbox" checked data-job="${job}"><span class="color-dot" style="background:${JOB_COLORS[job]}"></span><span>${job}</span>`;
+    lbl.querySelector('input').addEventListener('change', e => {
+      if (e.target.checked) state.filters.jobs.add(e.target.dataset.job);
+      else state.filters.jobs.delete(e.target.dataset.job);
+      applyFilters();
+    });
+    jobDiv.appendChild(lbl);
+  }
+}
+
+function generateNodeId(jobType) {
+  const prefix = ({
+    '구매·SCM': 'S', '생산·품질': 'Q', '영업·마케팅': 'M',
+    '기획·전략': 'P', '연구개발': 'R', '서비스·CS': 'C',
+    '인사·총무': 'H', 'IT·보안': 'I', '법무': 'L'
+  })[jobType] || 'N';
+  let n = 1;
+  while (state.nodes.get(`${prefix}${String(n).padStart(2,'0')}`) ||
+         state.removedHistory.some(h => h.node._data.id === `${prefix}${String(n).padStart(2,'0')}`)) {
+    n++;
+  }
+  return `${prefix}${String(n).padStart(2,'0')}`;
+}
+
+//====================== ADD EDGE ======================
+function openEdgeModal() {
+  const ids = [...state.selectedNodeIds];
+  const fromSel = document.getElementById('f_from');
+  const toSel   = document.getElementById('f_to');
+  fromSel.innerHTML = ''; toSel.innerHTML = '';
+
+  const items = [];
+  state.nodes.forEach(v => items.push({ id: v._data.id, label: v._data.label.replace(/\n/g,' ') }));
+  items.sort((a,b) => a.id.localeCompare(b.id));
+  items.forEach(it => {
+    fromSel.appendChild(new Option(`[${it.id}] ${it.label}`, it.id));
+    toSel.appendChild(new Option(`[${it.id}] ${it.label}`, it.id));
+  });
+  if (ids[0]) fromSel.value = ids[0];
+  if (ids[1]) toSel.value = ids[1];
+
+  document.getElementById('f_edgeLabel').value = '';
+  document.getElementById('f_edgeHours').value = 26;
+  document.getElementById('f_edgeType').value = '수동전달';
+  document.getElementById('edgeModal').classList.add('show');
+}
+function closeEdgeModal() { document.getElementById('edgeModal').classList.remove('show'); }
+
+function saveEdge() {
+  const from = document.getElementById('f_from').value;
+  const to   = document.getElementById('f_to').value;
+  const label = document.getElementById('f_edgeLabel').value.trim() || '연결';
+  const hours = parseFloat(document.getElementById('f_edgeHours').value);
+  const type  = document.getElementById('f_edgeType').value;
+
+  if (from === to) { showToast('출발과 도착 노드가 같습니다'); return; }
+  if (isNaN(hours) || hours < 0) { showToast('연간 처리시간을 올바르게 입력하세요'); return; }
+
+  let n = 1;
+  while (state.edges.get('e' + n) || state.removedHistory.some(h => h.edges.some(e => e && e._data.id === 'e' + n))) n++;
+  const newEdge = { id: 'e' + n, from, to, label, hours, transfer_type: type };
+  state.edges.add(edgeToVis(newEdge));
+  closeEdgeModal();
+  applyFilters();
+  showToast('엣지 연결됨');
+}
+
+//====================== MODAL EVENTS ======================
+document.querySelectorAll('[data-close]').forEach(el =>
+  el.addEventListener('click', () => {
+    closeNodeModal(); closeEdgeModal();
+  })
+);
+document.getElementById('nodeModal').addEventListener('click', e => {
+  if (e.target.id === 'nodeModal') closeNodeModal();
+});
+document.getElementById('edgeModal').addEventListener('click', e => {
+  if (e.target.id === 'edgeModal') closeEdgeModal();
+});
+document.getElementById('f_hours').addEventListener('input', updateCostPreview);
+// Auto-fill 직군 when a known dept is selected from datalist
+document.getElementById('f_dept').addEventListener('input', e => {
+  const v = e.target.value.trim();
+  const inferredJob = DEPT_TO_JOB[v];
+  if (inferredJob) {
+    const sel = document.getElementById('f_job');
+    sel.value = inferredJob;
+  }
+});
+document.getElementById('nodeSaveBtn').addEventListener('click', saveNode);
+document.getElementById('edgeSaveBtn').addEventListener('click', saveEdge);
+document.getElementById('addNodeBtn').addEventListener('click', () => openNodeModal());
+document.getElementById('addEdgeBtn').addEventListener('click', openEdgeModal);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeNodeModal(); closeEdgeModal(); }
+});
+
+//====================== EVENTS ======================
+document.getElementById('bulkRemoveBtn').addEventListener('click', bulkRemove);
+document.getElementById('fitBtn').addEventListener('click', () => {
+  // Reset any NaN/extreme positions, then fit
+  try {
+    const positions = state.network.getPositions();
+    const updates = [];
+    Object.keys(positions).forEach(id => {
+      const p = positions[id];
+      if (!p || isNaN(p.x) || isNaN(p.y) || !isFinite(p.x) || !isFinite(p.y)
+          || Math.abs(p.x) > 100000 || Math.abs(p.y) > 100000) {
+        updates.push({ id, x: (Math.random() - 0.5) * 200, y: (Math.random() - 0.5) * 200 });
+      }
+    });
+    if (updates.length) {
+      state.nodes.update(updates);
+      console.log('[fit] reset', updates.length, 'broken positions');
+    }
+    state.network.stabilize(150);
+    setTimeout(() => state.network.fit({ animation: { duration: 600 } }), 50);
+  } catch(e) { console.error(e); state.network.fit(); }
+});
+document.getElementById('exportBtn').addEventListener('click', exportToClipboard);
+document.getElementById('undoAllBtn').addEventListener('click', undoAll);
+document.getElementById('resetBtn').addEventListener('click', resetSimulation);
+
+//====================== BOOT ======================
+function boot() {
+  if (typeof vis === 'undefined' || !vis.DataSet) {
+    // vis-network not loaded yet — wait
+    setTimeout(boot, 80);
+    return;
+  }
+  // Recreate DataSets now that vis is available
+  state.nodes = new vis.DataSet();
+  state.edges = new vis.DataSet();
+  loadInitialData();
+  buildFilters();
+  initNetwork();
+  recomputeSavings();
+  renderRemovedList();
+  updateStatsBanner();
+  updateSelectionUI();
+  console.log('[boot] initialized with', state.nodes.length, 'nodes,', state.edges.length, 'edges');
+
+  // Force render after layout settles
+  setTimeout(() => {
+    try {
+      state.network.redraw();
+      state.network.fit({ animation: false });
+      const c = document.querySelector('#graph canvas');
+      console.log('[boot] canvas size:', c ? c.clientWidth + 'x' + c.clientHeight : 'NO CANVAS');
+    } catch(e) { console.error(e); }
+  }, 200);
+  setTimeout(() => {
+    try { state.network.fit({ animation: { duration: 600 } }); } catch(e) {}
+  }, 800);
+
+  // Re-fit on window resize
+  window.addEventListener('resize', () => {
+    try { state.network.redraw(); } catch(e) {}
+  });
+}
+boot();
+</script>
+</body>
+</html>

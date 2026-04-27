@@ -525,7 +525,7 @@
     </div>
 
     <div class="selection-badge" id="selectionBadge">
-      <span id="selectionCount">0</span>개 노드 선택됨 (Shift+클릭) — 2개 이상 시 ★ AX 적용으로 묶음
+      <span id="selectionCount">0</span>개 노드 선택됨 — 노드 클릭으로 추가/해제, 빈공간 클릭으로 전체 해제. 2개 이상 시 ★ AX 적용으로 묶음
     </div>
 
     <div class="panel-title" style="margin-top: 18px;">제거 이력</div>
@@ -1556,23 +1556,31 @@ function applyAXToSelection() {
 //====================== INTERACTIONS ======================
 function onNetworkClick(params) {
   hideContextMenu();
-  syncSelection(params.nodes);
-}
-
-function onSelectionChange(params) {
-  syncSelection(params.nodes);
-}
-
-function syncSelection(nodeIds) {
-  const newSet = new Set(nodeIds);
-  // Preserve order: keep existing order, append newly added
-  state.selectionOrder = state.selectionOrder.filter(id => newSet.has(id));
-  nodeIds.forEach(id => {
-    if (!state.selectionOrder.includes(id)) state.selectionOrder.push(id);
-  });
-  state.selectedNodeIds = newSet;
+  // Click on empty canvas → clear all selection
+  if (!params.nodes || params.nodes.length === 0) {
+    state.selectionOrder = [];
+    state.selectedNodeIds = new Set();
+    state.network.unselectAll();
+    updateSelectionUI();
+    return;
+  }
+  // Click on a node → TOGGLE that node in selection (accumulating)
+  const clickedId = params.nodes[0];
+  if (state.selectedNodeIds.has(clickedId)) {
+    state.selectedNodeIds.delete(clickedId);
+    state.selectionOrder = state.selectionOrder.filter(id => id !== clickedId);
+  } else {
+    state.selectedNodeIds.add(clickedId);
+    state.selectionOrder.push(clickedId);
+  }
+  // Push our selection back into vis-network so the visual highlight matches
+  try { state.network.setSelection({ nodes: [...state.selectedNodeIds] }); } catch(e) {}
   updateSelectionUI();
 }
+
+// vis-network's selectNode/deselectNode events would conflict with our toggle logic,
+// so we no-op them — onNetworkClick is the single source of truth.
+function onSelectionChange(params) { /* handled in onNetworkClick */ }
 
 function updateSelectionUI() {
   const count = state.selectedNodeIds.size;

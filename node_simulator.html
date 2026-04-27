@@ -490,7 +490,7 @@
         ★ 화살표 길이 = 처리 시간(병목 크기)<br>
         ★ 화살표 두께 = 시간 가중치<br>
         ◆ 표시 엣지 = 사이클 클로즈 (피드백 루프)<br>
-        <span style="color:#FF8F00; font-weight:700;">★ AX 트랙</span> = 자동화 적용 (포크레인 궤도 효과)
+        <span style="color:#FF8F00; font-weight:700;">★ AX 통합</span> = 두 노드를 묶어 하나의 자동화 단위로 (궤도가 두 노드를 감쌈)
       </div>
     </div>
     <div class="toolbar">
@@ -525,7 +525,7 @@
     </div>
 
     <div class="selection-badge" id="selectionBadge">
-      <span id="selectionCount">0</span>개 노드 선택됨 (Shift+클릭)
+      <span id="selectionCount">0</span>개 노드 선택됨 (Shift+클릭) — 2개 이상 시 ★ AX 적용으로 묶음
     </div>
 
     <div class="panel-title" style="margin-top: 18px;">제거 이력</div>
@@ -1214,7 +1214,8 @@ const state = {
   edges: null,
   removedHistory: [], // [{node, edges}]
   selectedNodeIds: new Set(),
-  axApplied: new Set(), // node IDs that have AX applied (caterpillar track effect)
+  axPairs: [], // [{a: nodeId, b: nodeId}] — pairs bound by caterpillar track
+  selectionOrder: [], // ordered list of selected node IDs (for picking pair endpoints)
   filters: {
     depts: new Set(),
     jobs: new Set(),
@@ -1343,11 +1344,11 @@ function initNetwork() {
   startAXAnimation();
 }
 
-//====================== ★ AX 캐터필러 트랙 애니메이션 ======================
+//====================== ★ AX 캐터필러 트랙 애니메이션 (페어 단위) ======================
 let _axRafId = null;
 function startAXAnimation() {
   function tick() {
-    if (state.axApplied && state.axApplied.size > 0 && state.network) {
+    if (state.axPairs && state.axPairs.length > 0 && state.network) {
       state.network.redraw(); // triggers afterDrawing → drawAXTracks
     }
     _axRafId = requestAnimationFrame(tick);
@@ -1356,114 +1357,124 @@ function startAXAnimation() {
 }
 
 function drawAXTracks(ctx) {
-  if (!state.axApplied || state.axApplied.size === 0) return;
-  const ids = [...state.axApplied].filter(id => state.nodes.get(id));
-  if (ids.length === 0) return;
+  if (!state.axPairs || state.axPairs.length === 0) return;
 
-  const positions = state.network.getPositions(ids);
   const t = performance.now();
   const phase = (t / 1000) * 60; // dash drift speed (px/sec)
   const spinAngle = (t / 1000) * 1.6; // wheel rotation (rad/sec)
 
-  ids.forEach(id => {
-    const p = positions[id];
-    if (!p) return;
-    const box = state.network.getBoundingBox(id);
-    if (!box) return;
-    const halfW = (box.right - box.left) / 2;
-    const halfH = (box.bottom - box.top) / 2;
-    drawCaterpillarTrack(ctx, p.x, p.y, halfW, halfH, phase, spinAngle);
+  // Drop pairs whose nodes are gone
+  state.axPairs = state.axPairs.filter(pr =>
+    state.nodes.get(pr.a) && state.nodes.get(pr.b)
+  );
+
+  state.axPairs.forEach(pair => {
+    const ids = [pair.a, pair.b];
+    const positions = state.network.getPositions(ids);
+    const p1 = positions[pair.a], p2 = positions[pair.b];
+    if (!p1 || !p2) return;
+    const b1 = state.network.getBoundingBox(pair.a);
+    const b2 = state.network.getBoundingBox(pair.b);
+    if (!b1 || !b2) return;
+    const r1 = Math.max((b1.right - b1.left) / 2, (b1.bottom - b1.top) / 2) + 12;
+    const r2 = Math.max((b2.right - b2.left) / 2, (b2.bottom - b2.top) / 2) + 12;
+    drawPairTrack(ctx, p1, p2, r1, r2, phase, spinAngle);
   });
 }
 
-function drawCaterpillarTrack(ctx, cx, cy, halfW, halfH, phase, spin) {
-  // Two wheels flank the node horizontally
-  const wheelR = Math.max(18, halfH * 1.05);
-  const offset = halfW + wheelR * 0.45; // distance from node center to wheel center
-  const yOff = 0;
-  const yWheel = cy + yOff;
-  const lx = cx - offset;
-  const rx = cx + offset;
+function drawPairTrack(ctx, p1, p2, r1, r2, phase, spin) {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 1) return;
+  const theta = Math.atan2(dy, dx);
+
+  // Use unified radius for cleaner geometry (max of two wheels)
+  const R = Math.max(r1, r2);
+
+  // Perpendicular angles: top side (theta - π/2), bottom side (theta + π/2)
+  const top = theta - Math.PI / 2;
+  const bot = theta + Math.PI / 2;
+  const cosT = Math.cos(top), sinT = Math.sin(top);
+  const cosB = Math.cos(bot), sinB = Math.sin(bot);
 
   ctx.save();
 
-  // 1) Outer track band (stadium shape) — Samsung blue thick base
-  ctx.lineWidth = 5;
-  ctx.strokeStyle = 'rgba(20, 40, 160, 0.85)';
+  // 1) Outer track band — capsule wrapping both wheels
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(20, 40, 160, 0.88)';
   ctx.beginPath();
-  ctx.moveTo(lx, yWheel - wheelR);
-  ctx.lineTo(rx, yWheel - wheelR);
-  ctx.arc(rx, yWheel, wheelR, -Math.PI / 2, Math.PI / 2, false);
-  ctx.lineTo(lx, yWheel + wheelR);
-  ctx.arc(lx, yWheel, wheelR, Math.PI / 2, -Math.PI / 2, false);
+  ctx.moveTo(p1.x + R * cosT, p1.y + R * sinT); // top of wheel 1
+  ctx.lineTo(p2.x + R * cosT, p2.y + R * sinT); // top of wheel 2
+  ctx.arc(p2.x, p2.y, R, top, bot, false);      // front arc (around p2)
+  ctx.lineTo(p1.x + R * cosB, p1.y + R * sinB); // bottom of wheel 1
+  ctx.arc(p1.x, p1.y, R, bot, top, false);      // back arc (around p1)
   ctx.closePath();
   ctx.stroke();
 
-  // 2) Track tread — moving dashes (direction of motion: clockwise around the track)
-  ctx.lineWidth = 7;
-  ctx.strokeStyle = '#FFB300'; // amber tread
-  ctx.setLineDash([10, 8]);
+  // 2) Moving treads (amber dashed line that slides along the track)
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#FFB300';
+  ctx.setLineDash([12, 9]);
   ctx.lineDashOffset = -phase;
   ctx.beginPath();
-  ctx.moveTo(lx, yWheel - wheelR);
-  ctx.lineTo(rx, yWheel - wheelR);
-  ctx.arc(rx, yWheel, wheelR, -Math.PI / 2, Math.PI / 2, false);
-  ctx.lineTo(lx, yWheel + wheelR);
-  ctx.arc(lx, yWheel, wheelR, Math.PI / 2, -Math.PI / 2, false);
+  ctx.moveTo(p1.x + R * cosT, p1.y + R * sinT);
+  ctx.lineTo(p2.x + R * cosT, p2.y + R * sinT);
+  ctx.arc(p2.x, p2.y, R, top, bot, false);
+  ctx.lineTo(p1.x + R * cosB, p1.y + R * sinB);
+  ctx.arc(p1.x, p1.y, R, bot, top, false);
   ctx.closePath();
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // 3) Inner secondary band (gives depth)
+  // 3) Inner highlight line (depth)
   ctx.lineWidth = 1.2;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+  const innerR = R - 5;
   ctx.beginPath();
-  ctx.moveTo(lx, yWheel - wheelR + 5);
-  ctx.lineTo(rx, yWheel - wheelR + 5);
-  ctx.moveTo(lx, yWheel + wheelR - 5);
-  ctx.lineTo(rx, yWheel + wheelR - 5);
+  ctx.moveTo(p1.x + innerR * cosT, p1.y + innerR * sinT);
+  ctx.lineTo(p2.x + innerR * cosT, p2.y + innerR * sinT);
+  ctx.moveTo(p1.x + innerR * cosB, p1.y + innerR * sinB);
+  ctx.lineTo(p2.x + innerR * cosB, p2.y + innerR * sinB);
   ctx.stroke();
 
-  // 4) Two wheels with spinning spokes (left & right)
-  drawWheel(ctx, lx, yWheel, wheelR - 4, spin);
-  drawWheel(ctx, rx, yWheel, wheelR - 4, -spin);
+  // 4) Two wheel rims with spinning spokes — DON'T fill, keep node visible inside
+  drawWheelOutline(ctx, p1.x, p1.y, R - 4, spin);
+  drawWheelOutline(ctx, p2.x, p2.y, R - 4, -spin); // counter-rotate (rolling forward)
 
-  // 5) AX 글로우 라벨
-  ctx.font = 'bold 11px "Nanum Gothic", sans-serif';
+  // 5) AX 통합 라벨 — 두 노드 사이 중앙
+  const midX = (p1.x + p2.x) / 2;
+  const midY = (p1.y + p2.y) / 2;
+  // Offset perpendicular to the connecting line so label sits ABOVE the track
+  const labelOffset = R + 18;
+  const lx = midX + cosT * labelOffset;
+  const ly = midY + sinT * labelOffset;
+  ctx.font = 'bold 12px "Nanum Gothic", sans-serif';
   ctx.fillStyle = '#FFB300';
-  ctx.strokeStyle = 'rgba(20, 40, 160, 0.85)';
-  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(20, 40, 160, 0.95)';
+  ctx.lineWidth = 4;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const labelY = yWheel + wheelR + 12;
-  ctx.strokeText('★ AX', cx, labelY);
-  ctx.fillText('★ AX', cx, labelY);
+  ctx.strokeText('★ AX 통합', lx, ly);
+  ctx.fillText('★ AX 통합', lx, ly);
 
   ctx.restore();
 }
 
-function drawWheel(ctx, cx, cy, r, angle) {
+function drawWheelOutline(ctx, cx, cy, r, angle) {
   ctx.save();
-  // Wheel body
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+  // Outer rim
   ctx.strokeStyle = '#1428A0';
-  ctx.lineWidth = 2.5;
+  ctx.lineWidth = 2.8;
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fill();
   ctx.stroke();
 
-  // Hub
-  ctx.fillStyle = '#1428A0';
-  ctx.beginPath();
-  ctx.arc(cx, cy, Math.max(2.5, r * 0.15), 0, Math.PI * 2);
-  ctx.fill();
-
-  // Spinning spokes
+  // Spinning spokes — semi-transparent so node behind stays readable
   ctx.translate(cx, cy);
   ctx.rotate(angle);
-  ctx.strokeStyle = '#1428A0';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(20, 40, 160, 0.45)';
+  ctx.lineWidth = 1.8;
   const spokes = 6;
   for (let i = 0; i < spokes; i++) {
     const a = (i / spokes) * Math.PI * 2;
@@ -1472,38 +1483,72 @@ function drawWheel(ctx, cx, cy, r, angle) {
     ctx.lineTo(Math.cos(a) * (r - 2), Math.sin(a) * (r - 2));
     ctx.stroke();
   }
+  // Hub
+  ctx.fillStyle = '#FFB300';
+  ctx.beginPath();
+  ctx.arc(0, 0, Math.max(3, r * 0.12), 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 
-function toggleAX(nodeIds) {
-  let added = 0, removed = 0;
-  nodeIds.forEach(id => {
-    if (!state.nodes.get(id)) return;
-    if (state.axApplied.has(id)) {
-      state.axApplied.delete(id);
-      removed++;
-    } else {
-      state.axApplied.add(id);
-      added++;
-    }
-  });
-  state.network.redraw();
-  if (added > 0 && removed === 0) showToast(`★ AX 적용: ${added}개 노드`);
-  else if (removed > 0 && added === 0) showToast(`AX 해제: ${removed}개 노드`);
-  else if (added > 0 && removed > 0) showToast(`AX 적용 ${added} / 해제 ${removed}`);
+function pairKey(a, b) { return a < b ? `${a}|${b}` : `${b}|${a}`; }
+function findPairIndex(a, b) {
+  const k = pairKey(a, b);
+  return state.axPairs.findIndex(pr => pairKey(pr.a, pr.b) === k);
+}
+function nodePartOfPair(id) {
+  return state.axPairs.some(pr => pr.a === id || pr.b === id);
 }
 
-function applyAXToSelection() {
-  const ids = [...state.selectedNodeIds];
-  if (ids.length === 0) return;
-  // If ALL already applied → toggle off; else apply to all
-  const allApplied = ids.every(id => state.axApplied.has(id));
-  if (allApplied) {
-    ids.forEach(id => state.axApplied.delete(id));
-    showToast(`AX 해제: ${ids.length}개`);
+function addPair(a, b) {
+  if (a === b) return false;
+  if (findPairIndex(a, b) >= 0) return false;
+  state.axPairs.push({ a, b });
+  return true;
+}
+function removePair(a, b) {
+  const i = findPairIndex(a, b);
+  if (i >= 0) { state.axPairs.splice(i, 1); return true; }
+  return false;
+}
+
+// Right-click action: removes all pairs touching this node (or no-op if none)
+function toggleAX(nodeIds) {
+  if (nodeIds.length !== 1) return;
+  const id = nodeIds[0];
+  const before = state.axPairs.length;
+  state.axPairs = state.axPairs.filter(pr => pr.a !== id && pr.b !== id);
+  const removed = before - state.axPairs.length;
+  if (removed > 0) {
+    showToast(`AX 해제: ${removed}개 페어`);
+    state.network.redraw();
   } else {
-    ids.forEach(id => state.axApplied.add(id));
-    showToast(`★ AX 적용: ${ids.length}개 노드 자동화 시작`);
+    showToast('이 노드는 AX 페어에 묶여있지 않습니다 (노드 2개 선택 후 ★ AX 적용)');
+  }
+}
+
+// Apply AX to selected nodes — pairs them up sequentially in selection order
+function applyAXToSelection() {
+  const ids = state.selectionOrder.filter(id => state.selectedNodeIds.has(id));
+  if (ids.length < 2) {
+    showToast('노드 2개 이상을 선택하세요 (Shift+클릭)');
+    return;
+  }
+
+  // Toggle behavior: if every consecutive pair is already bound → unbind all
+  let allBound = true;
+  for (let i = 0; i < ids.length - 1; i++) {
+    if (findPairIndex(ids[i], ids[i + 1]) < 0) { allBound = false; break; }
+  }
+  if (allBound) {
+    for (let i = 0; i < ids.length - 1; i++) removePair(ids[i], ids[i + 1]);
+    showToast(`AX 해제: ${ids.length - 1}개 페어`);
+  } else {
+    let added = 0;
+    for (let i = 0; i < ids.length - 1; i++) {
+      if (addPair(ids[i], ids[i + 1])) added++;
+    }
+    showToast(`★ AX 통합: ${added}개 페어 묶음 (${ids.length}개 노드 → 자동화 단위 ${ids.length - 1}개)`);
   }
   state.network.redraw();
 }
@@ -1511,13 +1556,21 @@ function applyAXToSelection() {
 //====================== INTERACTIONS ======================
 function onNetworkClick(params) {
   hideContextMenu();
-  // Selection is managed by vis-network's multiselect (Shift)
-  state.selectedNodeIds = new Set(params.nodes);
-  updateSelectionUI();
+  syncSelection(params.nodes);
 }
 
 function onSelectionChange(params) {
-  state.selectedNodeIds = new Set(params.nodes);
+  syncSelection(params.nodes);
+}
+
+function syncSelection(nodeIds) {
+  const newSet = new Set(nodeIds);
+  // Preserve order: keep existing order, append newly added
+  state.selectionOrder = state.selectionOrder.filter(id => newSet.has(id));
+  nodeIds.forEach(id => {
+    if (!state.selectionOrder.includes(id)) state.selectionOrder.push(id);
+  });
+  state.selectedNodeIds = newSet;
   updateSelectionUI();
 }
 
@@ -1528,7 +1581,7 @@ function updateSelectionUI() {
   if (count > 0) badge.classList.add('show'); else badge.classList.remove('show');
   document.getElementById('bulkRemoveBtn').disabled = count === 0;
   document.getElementById('addEdgeBtn').disabled = state.nodes.length < 2;
-  document.getElementById('applyAXBtn').disabled = count === 0;
+  document.getElementById('applyAXBtn').disabled = count < 2;
 }
 
 function onNetworkRightClick(params) {
@@ -1587,8 +1640,10 @@ function removeNode(nodeId, skipAnimation = false) {
     edges: connectedEdges
   });
 
-  // Clean up AX state for removed node
-  if (state.axApplied) state.axApplied.delete(nodeId);
+  // Clean up AX pairs that reference this node
+  if (state.axPairs && state.axPairs.length) {
+    state.axPairs = state.axPairs.filter(pr => pr.a !== nodeId && pr.b !== nodeId);
+  }
 
   if (skipAnimation) {
     state.edges.remove(connectedEdgeIds);
@@ -1696,9 +1751,11 @@ function undoAll() {
 }
 
 function resetSimulation() {
-  if (!confirm('시뮬레이션을 초기화합니다. 모든 제거 이력이 사라집니다.')) return;
+  if (!confirm('시뮬레이션을 초기화합니다. 모든 제거 이력과 AX 페어가 사라집니다.')) return;
   state.removedHistory = [];
   state.selectedNodeIds.clear();
+  state.selectionOrder = [];
+  state.axPairs = [];
   loadInitialData();
   applyFilters();
   recomputeSavings();
